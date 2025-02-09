@@ -1,0 +1,6 @@
+# created by virtualenv automatically
+*.ini
+archive/
+bin/
+include/
+lib/
