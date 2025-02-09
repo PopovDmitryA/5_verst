@@ -159,9 +159,7 @@ def union_vol(vol, vol_link, date_event, name_point):
     return vol
 
 def main_parse(link):
-    #link = 'https://5verst.ru/aleksandrino/results/08.04.2023/'
-    #link = 'https://5verst.ru/volgogradpanorama/results/07.09.2024/'  # Нет волонтерства, только протокол бегунов
-
+    '''Главная функция, которая собирает по частям итоговый протокол'''
     df_run, df_vol, df_run_link, df_vol_link, date_event, name_point = parse_protocol(link)
     final_df_run = processing_run(df_run, df_run_link, date_event, name_point)
     if isinstance(df_vol, pd.DataFrame):  # Проверяем тип данных в таблице с волонтёрами
