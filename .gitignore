@@ -1,6 +1,6 @@
 # created by virtualenv automatically
 *.ini
-archive/
+venv/archive/
 bin/
 include/
 lib/
