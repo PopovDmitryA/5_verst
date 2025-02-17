@@ -3,3 +3,4 @@
 .idea/
 venv/
 archive/
+.DS_Store
