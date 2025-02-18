@@ -82,7 +82,7 @@ def union_run(run, run_link, date_event, name_point):
             run.at[indices[0], 'date_event'] = date_event
             run.at[indices[0], 'name_point'] = name_point
         else:
-            print('Два участника с одним ФИО', row['name_runner'])
+            print('Два участника с одним ФИО', row['name_runner'], date_event, name_point, row['link_runner'])
     run['date_event'] = pd.to_datetime(run['date_event'], format='%d.%m.%Y')
     return run
 
