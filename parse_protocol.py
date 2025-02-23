@@ -2,20 +2,6 @@ import pandas as pd
 import requests, re
 from bs4 import BeautifulSoup
 
-def parse_vol(t):
-    '''Парсинг волонтеров со ссылками'''
-    columns = ['name_runner', 'link_runner']
-    df_vol_link = pd.DataFrame(columns=columns)
-    soup_vol = BeautifulSoup(t.text, 'html.parser').find('div', class_='results-table__wrapper shadow rounded-lg')
-    for link_vol in soup_vol.find_all('a'):
-        FIO_vol = link_vol.text
-        link_runner = link_vol.get('href')
-        new_row = {'name_runner': FIO_vol,
-                   'link_runner': link_runner}
-        df_vol_link = pd.concat([df_vol_link, pd.DataFrame([new_row])], ignore_index=True)
-        df_vol_link = df_vol_link.drop_duplicates()  # Удаляем дубликаты, т.к. эта таблица будет только справочником
-    return df_vol_link
-
 def identification_park_date(link, t):
     '''Определяем название парка и дату пробежки'''
     date_event = link.split('/')[5]
@@ -50,15 +36,14 @@ def check_status_runner(new_df_run):
             new_df_run.at[index, 'status_runner'] = 'active_runner'
     return new_df_run
 
-def processing_vol(df_vol, df_vol_link, date_event, name_point):
+def processing_vol(df_vol, date_event, name_point):
     '''Формируем финальный формат df волонтёров для БД'''
     df_vol_copy = df_vol.copy()
-    new_df_vol = union_vol(df_vol_copy, df_vol_link, date_event, name_point)
-
-    new_df_vol.rename(columns={
-        'Волонтёр': 'name_runner',
-        'Роль': 'vol_role'
-    }, inplace=True)
+    df_vol_copy['date_event'] = date_event
+    df_vol_copy['date_event'] = pd.to_datetime(df_vol_copy['date_event'], format='%d.%m.%Y')
+    df_vol_copy['name_point'] = name_point
+    df_vol_copy['user_id'] = df_vol_copy['link_runner'].apply(extract_user_id)
+    df_vol_copy = df_vol_copy.drop(columns=['Участник'])
 
     new_column_order = ['name_point',
                         'date_event',
@@ -66,22 +51,36 @@ def processing_vol(df_vol, df_vol_link, date_event, name_point):
                         'link_runner',
                         'user_id',
                         'vol_role']
-    new_df_vol = new_df_vol.reindex(columns=new_column_order)
+    df_vol_copy = df_vol_copy.reindex(columns=new_column_order)
 
-    return new_df_vol
+    return df_vol_copy
 
-def union_vol(vol, vol_link, date_event, name_point):
-    '''Объединяем два df, заменяем мусорный столбец с именами на нормальный'''
-    for index, row in vol_link.iterrows():
-        indices = vol.index[vol['Волонтёр'].str.contains(row['name_runner'])]
-        for i in indices:
-            vol.at[i, 'Волонтёр'] = row['name_runner']
-            vol.at[i, 'link_runner'] = row['link_runner']
-            vol.at[i, 'user_id'] = extract_user_id(row['link_runner'])
-            vol.at[i, 'date_event'] = date_event
-            vol.at[i, 'name_point'] = name_point
-    vol['date_event'] = pd.to_datetime(vol['date_event'], format='%d.%m.%Y')
-    return vol
+def parse_vol(t):
+    '''Парсинг волонтеров со ссылками'''
+    soup_vol = BeautifulSoup(t.text, 'html.parser')
+    table_vol = soup_vol.find('table',
+                              {'class': 'sortable n-last results-table min-w-full leading-normal'})
+    rows = table_vol.find_all('tr')
+    data = []
+    for index, row in enumerate(rows):
+        cols = row.find_all('td')
+        if len(cols) == 0: continue
+
+        cols = [col.text.strip() for col in cols]
+        try:
+            find_link = row.find('a')
+            name_runner, link_runner = find_link.text, find_link.get('href')
+            cols += [name_runner, link_runner]
+        except:
+            pass
+        data.append(cols)
+    columns = ['Участник',
+               'vol_role',
+               'name_runner',
+               'link_runner']
+    df_vol = pd.DataFrame(data, columns=columns)
+
+    return df_vol
 
 def processing_run(df_run_link, date_event, name_point):
     '''Формируем финальный формат df пробежки для БД'''
@@ -150,19 +149,19 @@ def parse_protocol(link):
 
     if len(parse_site) == 1:  # Если волонтерства не отгружены
         df_run = parse_runner(t)
-        df_vol, df_vol_link = False, False
+        df_vol = False
     else:
-        df_vol = pd.DataFrame(parse_site[1])
+        # df_vol = pd.DataFrame(parse_site[1])
         df_run = parse_runner(t)
-        df_vol_link = parse_vol(t)
+        df_vol = parse_vol(t)
 
-    return df_run, df_vol, df_vol_link, date_event, name_point
-
+    return df_run, df_vol, date_event, name_point
 
 def main_parse(link):
     '''Главная функция, которая собирает по частям итоговый протокол'''
-    df_run_link, df_vol, df_vol_link, date_event, name_point = parse_protocol(link)
+    df_run_link, df_vol_link, date_event, name_point = parse_protocol(link)
     final_df_run = processing_run(df_run_link, date_event, name_point)
-    if isinstance(df_vol, pd.DataFrame):  # Проверяем тип данных в таблице с волонтёрами
-        final_df_vol = processing_vol(df_vol, df_vol_link, date_event, name_point)
-    return final_df_run, final_df_vol
+    if isinstance(df_vol_link, pd.DataFrame):  # Проверяем тип данных в таблице с волонтёрами
+        final_df_vol = processing_vol(df_vol_link, date_event, name_point)
+        return final_df_run, final_df_vol
+    return final_df_run, None
