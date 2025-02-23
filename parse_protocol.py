@@ -27,13 +27,17 @@ def extract_user_id(link):
 
 def check_status_runner(new_df_run):
     '''Дополняем df столбцом о статусе участника'''
-    for index, row in new_df_run.iterrows():
+
+    def determine_status(row):
         if row['name_runner'] == 'НЕИЗВЕСТНЫЙ':
-            new_df_run.at[index, 'status_runner'] = 'unknown_runner'
-        elif row['user_id'] == None:
-            new_df_run.at[index, 'status_runner'] = 'unregistered_runner'
+            return 'unknown_runner'
+        elif pd.isna(row['user_id']):
+            return 'unregistered_runner'
         else:
-            new_df_run.at[index, 'status_runner'] = 'active_runner'
+            return 'active_runner'
+
+    new_df_run['status_runner'] = new_df_run.apply(determine_status, axis=1)
+
     return new_df_run
 
 def processing_vol(df_vol, date_event, name_point):
@@ -56,7 +60,7 @@ def processing_vol(df_vol, date_event, name_point):
     return df_vol_copy
 
 def parse_vol(t):
-    '''Парсинг волонтеров со ссылками'''
+    '''Парсинг волонтеров сбор df из полученных данных и возврат сырой таблицы'''
     soup_vol = BeautifulSoup(t.text, 'html.parser')
     table_vol = soup_vol.find('table',
                               {'class': 'sortable n-last results-table min-w-full leading-normal'})
@@ -85,49 +89,53 @@ def parse_vol(t):
 def processing_run(df_run_link, date_event, name_point):
     '''Формируем финальный формат df пробежки для БД'''
     df_run_copy = df_run_link.copy()
+    # Вычленение возрастной группы из мусорной строки и удаление ненужного столбца
     df_run_copy['age_category'] = df_run_copy['Возрастной рейтинг'].apply(slice_before_parenthesis)
     df_run_copy.drop(columns=['Возрастной рейтинг'], inplace=True)
-    df_run_copy['date_event'] = date_event
-    df_run_copy['date_event'] = pd.to_datetime(df_run_copy['date_event'], format='%d.%m.%Y')
+
+    #Добавление даты события и наименования точки
+    #df_run_copy['date_event'] = date_event
+    df_run_copy['date_event'] = pd.to_datetime(date_event, format='%d.%m.%Y')
     df_run_copy['name_point'] = name_point
+
+    #Извлечение user_id из ссылки
     df_run_copy['user_id'] = df_run_copy['link_runner'].apply(extract_user_id)
+
+    #Заполнение пустых полей в случае неизвестного участника
     mask = df_run_copy['Участник'] == 'НЕИЗВЕСТНЫЙ'
     df_run_copy.loc[mask, 'name_runner'] = df_run_copy.loc[mask, 'Участник']
+
+    #Проверка статуса участника и удаление лишнего столбца
     df_run_copy = check_status_runner(df_run_copy)
     df_run_copy = df_run_copy.drop(columns=['Участник'])
 
-    new_column_order = ['name_point',
-                        'date_event',
-                        'name_runner',
-                        'link_runner',
-                        'user_id',
-                        'position',
-                        'finish_time',
-                        'age_category',
-                        'status_runner']
-    df_run_copy = df_run_copy.reindex(columns=new_column_order)
+    df_run_copy = df_run_copy.reindex(columns=[
+            'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id',
+            'position', 'finish_time', 'age_category', 'status_runner'
+        ])
 
     return df_run_copy
 
 def parse_runner(t):
-    '''Парсинг таблицы с бегунами'''
+    '''Парсинг таблицы с бегунами и возврат сырой таблицы df'''
     soup_run = BeautifulSoup(t.text, 'html.parser')
     table_runner = soup_run.find('table',
-                                 {
-                                     'class': 'sortable n-last results-table results-table_with-sticky-head min-w-full leading-normal'})
+                                 {'class': 'sortable n-last results-table results-table_with-sticky-head min-w-full leading-normal'})
     rows = table_runner.find_all('tr')
     data = []
     for index, row in enumerate(rows):
         cols = row.find_all('td')
-        if len(cols) == 0: continue
+        #Пропускаем строки без данных
+        if not cols:
+            continue
 
         cols = [col.text.strip() for col in cols]
         try:
             find_link = row.find('a')
             name_runner, link_runner = find_link.text, find_link.get('href')
             cols += [name_runner, link_runner]
-        except:
-            pass
+        except AttributeError:
+            pass #Ничего не делаем, если ссылка отсутствует
         data.append(cols)
 
     columns = ['position',
@@ -141,7 +149,7 @@ def parse_runner(t):
     return df_run_link
 
 def parse_protocol(link):
-    '''Функция, возвращающая по ссылке на протокол 3 DF со страницы протоколов'''
+    '''Функция, возвращающая сырые 2 DF со страницы с протоколом и дату с именем локации'''
     parse_site = pd.read_html(link)  # Парсим табличку
     t = requests.get(link)  # Парсим страницу
 
@@ -151,7 +159,6 @@ def parse_protocol(link):
         df_run = parse_runner(t)
         df_vol = False
     else:
-        # df_vol = pd.DataFrame(parse_site[1])
         df_run = parse_runner(t)
         df_vol = parse_vol(t)
 
