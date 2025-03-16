@@ -51,5 +51,6 @@ def transform_df_list_protocol(list_protocol):
                        'mean_time',
                        'best_time_woman',
                        'best_time_man']]  # Новый порядок
+    df_copy['index_event'] = df_copy['index_event'].replace('', 0)
 
     return df_copy
