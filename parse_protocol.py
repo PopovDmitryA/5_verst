@@ -93,26 +93,30 @@ def processing_run(df_run_link, date_event, name_point):
     df_run_copy['age_category'] = df_run_copy['Возрастной рейтинг'].apply(slice_before_parenthesis)
     df_run_copy.drop(columns=['Возрастной рейтинг'], inplace=True)
 
-    #Добавление даты события и наименования точки
-    #df_run_copy['date_event'] = date_event
+    # Добавление даты события и наименования точки
     df_run_copy['date_event'] = pd.to_datetime(date_event, format='%d.%m.%Y')
     df_run_copy['name_point'] = name_point
 
-    #Извлечение user_id из ссылки
+    # Извлечение user_id из ссылки
     df_run_copy['user_id'] = df_run_copy['link_runner'].apply(extract_user_id)
 
-    #Заполнение пустых полей в случае неизвестного участника
+    # Заполнение пустых полей в случае неизвестного участника
     mask = df_run_copy['Участник'] == 'НЕИЗВЕСТНЫЙ'
     df_run_copy.loc[mask, 'name_runner'] = df_run_copy.loc[mask, 'Участник']
 
-    #Проверка статуса участника и удаление лишнего столбца
+    # Проверка статуса участника и удаление лишнего столбца
     df_run_copy = check_status_runner(df_run_copy)
     df_run_copy = df_run_copy.drop(columns=['Участник'])
 
     df_run_copy = df_run_copy.reindex(columns=[
-            'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id',
-            'position', 'finish_time', 'age_category', 'status_runner'
-        ])
+        'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id',
+        'position', 'finish_time', 'age_category', 'status_runner'
+    ])
+
+    df_run_copy['finish_time'] = df_run_copy['finish_time'].replace('', pd.NA).fillna('00:00:00')
+    df_run_copy['finish_time'] = pd.to_datetime(df_run_copy['finish_time'], format='%H:%M:%S', errors='coerce').dt.time
+
+    df_run_copy['position'] = pd.to_numeric(df_run_copy['position'], errors='coerce').astype('Int64')
 
     return df_run_copy
 
@@ -125,7 +129,7 @@ def parse_runner(t):
     data = []
     for index, row in enumerate(rows):
         cols = row.find_all('td')
-        #Пропускаем строки без данных
+        # Пропускаем строки без данных
         if not cols:
             continue
 
@@ -135,7 +139,7 @@ def parse_runner(t):
             name_runner, link_runner = find_link.text, find_link.get('href')
             cols += [name_runner, link_runner]
         except AttributeError:
-            pass #Ничего не делаем, если ссылка отсутствует
+            pass  # Ничего не делаем, если ссылка отсутствует
         data.append(cols)
 
     columns = ['position',
