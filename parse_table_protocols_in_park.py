@@ -1,4 +1,4 @@
-import requests, re
+import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
@@ -54,7 +54,9 @@ def transform_df_list_protocol(list_protocol):
     df_copy['index_event'] = df_copy['index_event'].replace('', 0).astype(int)
     df_copy['date_event'] = pd.to_datetime(df_copy['date_event'], format='%d.%m.%Y', errors='coerce')
     for col in ['mean_time', 'best_time_woman', 'best_time_man']:
-        df_copy[col] = pd.to_datetime(df_copy[col], format='%H:%M:%S', errors='coerce')
+        df_copy[col] = df_copy[col].replace('', pd.NA).fillna('00:00:00')
+        df_copy[col] = pd.to_datetime(df_copy[col], format='%H:%M:%S', errors='coerce').dt.time
+
     for col in ['index_event', 'count_runners', 'count_vol']:
         df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce').astype('Int64')
 
