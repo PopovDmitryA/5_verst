@@ -31,7 +31,7 @@ def transform_df_last_event(df):
     df_copy = df.copy()
     df_copy['name_point'] = df_copy['Старт #'].apply(lambda x: x.split('#')[0].strip())
     df_copy['index_event'] = df_copy['Старт #'].apply(lambda x: x.split('#', 1)[-1].strip() if '#' in x else '0')
-    df_copy['index_event'] = pd.to_numeric(df_copy['index_event'], errors='coerce').astype('Int64')
+    #df_copy['index_event'] = pd.to_numeric(df_copy['index_event'], errors='coerce').astype('Int64')
     df_copy['is_test'] = df_copy['Старт #'].apply(lambda x: False if '#' in x else True)
 
     df_copy['link_point'] = df_copy['link_event'].apply(link_handler.main_link_event)
@@ -58,6 +58,13 @@ def transform_df_last_event(df):
                        'count_vol',
                        'mean_time',
                        'best_time_woman',
-                       'best_time_man']]  # Новый порядок
+                       'best_time_man']]
+
+    for col in ['mean_time', 'best_time_woman', 'best_time_man']:
+        df_copy[col] = df_copy[col].replace('', pd.NA).fillna('00:00:00')
+        df_copy[col] = pd.to_datetime(df_copy[col], format='%H:%M:%S', errors='coerce').dt.time
+
+    for col in ['index_event', 'count_runners', 'count_vol']:
+        df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce').astype('Int64')
 
     return df_copy
