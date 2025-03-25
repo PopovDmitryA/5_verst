@@ -23,3 +23,8 @@ def link_latest_result_event(main_link):
 def link_all_result_event(main_link):
     '''На вход подаем главную страницу парка, получаем ссылку на страницу со всеми протоколами'''
     return (main_link) + 'results/all/'
+
+def link_protocol_from_date(main_link, date_event):
+    '''На вход подаем главную страницу парка и дату пробежки, вернется ссылка на результаты забега'''
+    formatted_date = date_event.strftime("%d.%m.%Y")
+    return main_link + 'results/' + formatted_date + '/'
