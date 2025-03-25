@@ -16,17 +16,19 @@ db_name = config['five_verst_stats']['dbname']
 credential = f'postgresql://{db_user}:{db_pass}@{db_host}/{db_name}'
 
 def main():
-    link = 'https://5verst.ru/aleksandrino/results/22.04.2023/'
-    final_df_run, final_df_vol = parse_protocol.main_parse(link)
-    print(final_df_run, final_df_vol)
-    link = 'https://5verst.ru/purnavolok/results/all/'
-    all_protocol = ptpp.transform_df_list_protocol(ptpp.list_protocols_in_park(link))
-    print(all_protocol)
-    print(plr.transform_df_last_event(plr.last_event_parse()))
+    #link = 'https://5verst.ru/aleksandrino/results/22.04.2023/'
+    # final_df_run, final_df_vol = parse_protocol.main_parse(link)
+    # print(final_df_run, final_df_vol)
+    # link = 'https://5verst.ru/purnavolok/results/all/'
+    # all_protocol = ptpp.transform_df_list_protocol(ptpp.list_protocols_in_park(link))
+    # print(all_protocol)
+    # print(plr.transform_df_last_event(plr.last_event_parse()))
+    #
+    # engine = db.db_connect(credential)
+    # print(db.get_table(engine, 'list_all_events'))
+    #print(udf.check_new_protocols(credential))
 
-    engine = db.db_connect(credential)
-    print(db.get_table(engine, 'list_all_events'))
+    udf.add_new_protocols(credential)
 
-    print(udf.check_new_protocols(credential))
 if __name__ == '__main__':
     main()
