@@ -2,7 +2,7 @@ import DB_handler as db
 import pandas as pd
 import link_handler
 import parse_last_running as plr
-from tqdm import tqdm
+#from tqdm import tqdm
 import parse_protocol as pp
 
 def check_new_protocols(engine):
@@ -54,8 +54,9 @@ def add_new_protocols(credential):
         db.append_df(engine, 'list_all_events', new_data)
         data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
 
-        count = len(new_data)
-        for index, row in tqdm(new_data.iterrows(), total=count):
+        #count = len(new_data)
+        #for index, row in tqdm(new_data.iterrows(), total=count):
+        for index, row in new_data.iterrows():
             link = row['link_event']
             final_df_run, final_df_vol = pp.main_parse(link)
             data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
@@ -66,3 +67,5 @@ def add_new_protocols(credential):
         db.append_df(engine, 'details_protocol', data_protocols)
         engine = db.db_connect(credential)
         db.append_df(engine, 'details_vol', data_protocol_vol)
+
+        return f'В БД Записано {len(new_data)} протоколов, {len(data_protocols)} строчек бегунов, {len(data_protocol_vol)} строчек волонтеров'
