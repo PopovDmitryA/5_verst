@@ -45,12 +45,13 @@ def check_new_protocols(engine):
     return finish_df
 
 def add_new_protocols(credential):
+    '''Проверяем наличие протоколов, которые можно записать в БД, записываем + парсим детали протокола и записываем их в базу'''
     engine = db.db_connect(credential)
     new_data = check_new_protocols(engine)
     if len(new_data) > 0:
+        print(f'Есть {len(new_data)} протоколов для записи в БД')
         engine = db.db_connect(credential)
         db.append_df(engine, 'list_all_events', new_data)
-        #db.info_table_update(engine, table_name, upd_time)
         data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
 
         count = len(new_data)
@@ -59,6 +60,7 @@ def add_new_protocols(credential):
             final_df_run, final_df_vol = pp.main_parse(link)
             data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
             data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
+            print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
 
         engine = db.db_connect(credential)
         db.append_df(engine, 'details_protocol', data_protocols)

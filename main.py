@@ -1,7 +1,8 @@
-import parse_protocol
-import parse_table_protocols_in_park as ptpp
-import parse_last_running as plr
-import DB_handler as db
+#import parse_protocol
+# import parse_table_protocols_in_park as ptpp
+# import parse_last_running as plr
+# import DB_handler as db
+from datetime import datetime
 import configparser
 import update_data_functions as udf
 
@@ -27,8 +28,8 @@ def main():
     # engine = db.db_connect(credential)
     # print(db.get_table(engine, 'list_all_events'))
     #print(udf.check_new_protocols(credential))
-
+    print(f'{datetime.now()}: Запуск скрипта проверки наличия новых протоколов')
     udf.add_new_protocols(credential)
-
+    print('___________________________________________', end='\n')
 if __name__ == '__main__':
     main()
