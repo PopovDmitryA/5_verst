@@ -21,7 +21,7 @@ result = pd.read_sql(f"SELECT * FROM general_link_all_location", con=engine)
 empty_df = pd.DataFrame()
 
 count = len(result)
-for index, row in tqdm(result.iterrows(), total=count):
+for _, row in tqdm(result.iterrows(), total=count):
     link = lh.link_all_result_event(row['link_point'])
     all_point_protocol = ptpp.transform_df_list_protocol(ptpp.list_protocols_in_park(link))
     empty_df = pd.concat([empty_df, all_point_protocol], ignore_index=True)

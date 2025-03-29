@@ -8,11 +8,10 @@ import parse_protocol as pp
 def check_new_protocols(engine):
     '''Получаем данные протоколов, которые можно внести в БД'''
     #Получаем данные со списком протоколов
-    #engine = db.db_connect(credential)
     df = db.get_table(engine, 'list_all_events', 'index_event, name_point, date_event, link_event, is_test')
     df['link_point'] = df['link_event'].apply(link_handler.main_link_event)
     df = df.drop(columns=['link_event'])
-    DB_data = df[["index_event", "name_point", "date_event", "link_point", "is_test"]]
+    db_data = df[["index_event", "name_point", "date_event", "link_point", "is_test"]]
 
     #Парсим последние протоколы
     last_event = plr.transform_df_last_event(plr.last_event_parse())
@@ -21,7 +20,7 @@ def check_new_protocols(engine):
     compare_event = last_event[['index_event', 'name_point', 'date_event', 'link_point', 'is_test']].copy()
 
     # Объединяем датафреймы с помощью merge и добавляем индикатор совпадений
-    merged_df = pd.merge(compare_event, DB_data, how='left', indicator=True)
+    merged_df = pd.merge(compare_event, db_data, how='left', indicator=True)
 
     # Отбираем строки, которых нет в df2
     missing_rows = merged_df[merged_df['_merge'] == 'left_only']
@@ -48,24 +47,29 @@ def add_new_protocols(credential):
     '''Проверяем наличие протоколов, которые можно записать в БД, записываем + парсим детали протокола и записываем их в базу'''
     engine = db.db_connect(credential)
     new_data = check_new_protocols(engine)
-    if len(new_data) > 0:
-        print(f'Есть {len(new_data)} протоколов для записи в БД')
-        engine = db.db_connect(credential)
-        db.append_df(engine, 'list_all_events', new_data)
-        data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
+    if len(new_data) == 0:
+        return
+    print(f'Есть {len(new_data)} протоколов для записи в БД')
+    engine = db.db_connect(credential)
+    db.append_df(engine, 'list_all_events', new_data)
+    data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
 
-        #count = len(new_data)
-        #for index, row in tqdm(new_data.iterrows(), total=count):
-        for index, row in new_data.iterrows():
-            link = row['link_event']
-            final_df_run, final_df_vol = pp.main_parse(link)
-            data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
-            data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
-            print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
+    #count = len(new_data)
+    #for index, row in tqdm(new_data.iterrows(), total=count):
+    for _, row in new_data.iterrows():
+        link = row['link_event']
+        final_df_run, final_df_vol = pp.main_parse(link)
+        data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
+        data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
+        print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
 
-        engine = db.db_connect(credential)
-        db.append_df(engine, 'details_protocol', data_protocols)
-        engine = db.db_connect(credential)
-        db.append_df(engine, 'details_vol', data_protocol_vol)
+    engine = db.db_connect(credential)
+    db.append_df(engine, 'details_protocol', data_protocols)
+    db.update_view(engine, 'new_turists')
 
-        return print(f'В БД Записано {len(new_data)} протоколов, {len(data_protocols)} строчек бегунов, {len(data_protocol_vol)} строчек волонтеров')
+    engine = db.db_connect(credential)
+    db.append_df(engine, 'details_vol', data_protocol_vol)
+    db.update_view(engine, 'new_turists_vol')
+
+
+    return print(f'В БД Записано {len(new_data)} протоколов, {len(data_protocols)} строчек бегунов, {len(data_protocol_vol)} строчек волонтеров')

@@ -30,6 +30,6 @@ def main():
     #print(udf.check_new_protocols(credential))
     print(f'{datetime.now()}: Запуск скрипта проверки наличия новых протоколов')
     udf.add_new_protocols(credential)
-    print('___________________________________________', end='\n')
+    print('_' * 20)
 if __name__ == '__main__':
     main()

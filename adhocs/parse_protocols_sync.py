@@ -45,7 +45,7 @@ MAX_WORKERS = 4  # Задаем максимальное количество п
 with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
     futures = []
     count = len(result)
-    for index, row in result.iterrows():
+    for _, row in result.iterrows():
         future = executor.submit(process_link, row)
         futures.append(future)
 
