@@ -20,7 +20,7 @@ result = pd.read_sql(f"SELECT * FROM list_all_events", con=engine)
 all_protocol, all_protocol_vol = pd.DataFrame(), pd.DataFrame()
 
 count = len(result)
-for index, row in tqdm(result.iterrows(), total=count):
+for _, row in tqdm(result.iterrows(), total=count):
     # Две строчки ниже расчитаны на первичный сбор данных через юпитер блокнот на случай, если скрипт падает, чтобы он продолжил заполнять df, который уже начал
     #if ((all_protocol['date_event'].isin([row['date_event']])) & (all_protocol['name_point'].isin([row['name_point']]))).any():
     #    continue

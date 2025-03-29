@@ -32,3 +32,9 @@ def info_table_update(engine, table_name, upd_time):
     session.execute(insert_query)
     session.commit()
     session.close()
+
+def update_view(engine, view):
+    '''Обновление материализованной view'''
+    with engine.begin() as conn:
+        query = sa.text(f"REFRESH MATERIALIZED VIEW {view}")
+        conn.execute(query)
