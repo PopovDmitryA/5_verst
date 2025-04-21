@@ -16,8 +16,8 @@ db_name = config['five_verst_stats']['dbname']
 
 credential = f'postgresql://{db_user}:{db_pass}@{db_host}/{db_name}'
 
-def main():
-    #link = 'https://5verst.ru/aleksandrino/results/22.04.2023/'
+#def main():
+    # link = 'https://5verst.ru/aleksandrino/results/22.04.2023/'
     # final_df_run, final_df_vol = parse_protocol.main_parse(link)
     # print(final_df_run, final_df_vol)
     # link = 'https://5verst.ru/purnavolok/results/all/'
@@ -28,8 +28,24 @@ def main():
     # engine = db.db_connect(credential)
     # print(db.get_table(engine, 'list_all_events'))
     #print(udf.check_new_protocols(credential))
+
+def update_protocols():
+    list_site_protocols, now_table = udf.get_list_all_protocol(credential)
+    list_different = udf.find_dif(list_site_protocols, now_table)
+    #Выше мы составили список парков, которые нужно перевыгрузить, далее нужно выгрузить по ним протоколы, удалить данные и записать данные
+
+def record_latest_protocol():
     print(f'{datetime.now()}: Запуск скрипта проверки наличия новых протоколов')
-    udf.add_new_protocols(credential)
+    new_data = udf.check_new_protocols(credential)
+    if len(new_data) == 0:
+        return
+    print(f'Есть {len(new_data)} протоколов для записи в БД')
+
+    data_protocols, data_protocol_vol = udf.get_list_protocol(new_data)
+    udf.add_new_protocols(credential, new_data, data_protocols, data_protocol_vol)
     print('_' * 20)
+
 if __name__ == '__main__':
-    main()
+    #main()
+    record_latest_protocol()
+    #update_protocols()

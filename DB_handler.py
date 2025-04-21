@@ -17,11 +17,13 @@ def get_table(engine, name_table, columns='*'):
 
 
 def append_df(engine, table, df):
+    '''Добавление df в таблицу БД'''
     df.to_sql(table, engine, if_exists="append", index=False)
     info_table_update(engine, table, datetime.now())
 
 
 def info_table_update(engine, table_name, upd_time):
+    '''Функция записи информации об обновлении данных в определенной таблице БД (логер)'''
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -29,6 +31,20 @@ def info_table_update(engine, table_name, upd_time):
         INSERT INTO update_table (table_name, update_date)
         VALUES ('{table_name}', '{upd_time}');
         """)
+    session.execute(insert_query)
+    session.commit()
+    session.close()
+
+def update_data_from_df(engine, table_name, df, condition_columns, value_columns):
+    '''В разработке'''
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    insert_query = sa.text(f"""
+            UPDATE {table_name} 
+            SET {value}
+            WHERE {condition};
+            """)
     session.execute(insert_query)
     session.commit()
     session.close()
