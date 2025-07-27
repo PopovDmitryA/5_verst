@@ -1,51 +1,89 @@
-#import parse_protocol
-# import parse_table_protocols_in_park as ptpp
-# import parse_last_running as plr
-# import DB_handler as db
-from datetime import datetime
-import configparser
-import update_data_functions as udf
+from schedule_scripts import record_latest_protocol, update_all_protocols, update_recent_by_count, update_data_main, update_FIO
 
-config = configparser.ConfigParser()
-config.read('/Users/dmitry/PycharmProjects/5_verst/5_verst.ini')
+if __name__ == "__main__":
+    while True:
+        choice = input(
+            "\nВыберите способ обновления данных:\n"
+            "1 — Запустить обновление по последним протоколам\n"
+            "2 — Сравнить и обновить по саммари всех протоколов\n"
+            '3 - Актуализировать ФИО участников, если были изменения\n'
+            "4 — Сравнить последние X протоколов\n"
+            "Ваш выбор: "
+        )
 
-db_host = config['five_verst_stats']['host']
-db_user = config['five_verst_stats']['username']
-db_pass = config['five_verst_stats']['password']
-db_name = config['five_verst_stats']['dbname']
+        if choice == '1':
+            record_latest_protocol.record_latest_protocol()
+            break
 
-credential = f'postgresql://{db_user}:{db_pass}@{db_host}/{db_name}'
+        elif choice == '2':
+            update_all_protocols.update_protocols()
+            break
 
-#def main():
-    # link = 'https://5verst.ru/aleksandrino/results/22.04.2023/'
-    # final_df_run, final_df_vol = parse_protocol.main_parse(link)
-    # print(final_df_run, final_df_vol)
-    # link = 'https://5verst.ru/purnavolok/results/all/'
-    # all_protocol = ptpp.transform_df_list_protocol(ptpp.list_protocols_in_park(link))
-    # print(all_protocol)
-    # print(plr.transform_df_last_event(plr.last_event_parse()))
-    #
-    # engine = db.db_connect(credential)
-    # print(db.get_table(engine, 'list_all_events'))
-    #print(udf.check_new_protocols(credential))
+        elif choice == '3':
+            update_FIO.update_FIO()
+            break
 
-def update_protocols():
-    list_site_protocols, now_table = udf.get_list_all_protocol(credential)
-    list_different = udf.find_dif(list_site_protocols, now_table)
-    #Выше мы составили список парков, которые нужно перевыгрузить, далее нужно выгрузить по ним протоколы, удалить данные и записать данные
+        elif choice == '4':
+            sub_choice = input(
+                "\nВыберите режим сравнения:\n"
+                "1 — Все парки\n"
+                "2 — Список парков (диапазон)\n"
+                "3 — Один парк\n"
+                "Ваш выбор: "
+            )
 
-def record_latest_protocol():
-    print(f'{datetime.now()}: Запуск скрипта проверки наличия новых протоколов')
-    new_data = udf.check_new_protocols(credential)
-    if len(new_data) == 0:
-        return
-    print(f'Есть {len(new_data)} протоколов для записи в БД')
+            if sub_choice == '1':
+                try:
+                    count_last_protocol = int(input("\nУкажите количество последних протоколов для сравнения (0, если все): "))
+                    update_recent_by_count.find_dif_details_protocol(count_last_protocol)
+                    break
+                except ValueError:
+                    print("Ошибка! Пожалуйста, введите целое число.")
 
-    data_protocols, data_protocol_vol = udf.get_list_protocol(new_data)
-    udf.add_new_protocols(credential, new_data, data_protocols, data_protocol_vol)
-    print('_' * 20)
+            elif sub_choice == '2':
+                park_list = update_data_main.list_point_update()
+                for i, park in enumerate(park_list, 1):
+                    print(f"{i}. {park}")
 
-if __name__ == '__main__':
-    #main()
-    record_latest_protocol()
-    #update_protocols()
+                try:
+                    start = int(input("\nВведите начальный номер парка (от): "))
+                    end = int(input("Введите конечный номер парка (до): "))
+
+                    if not (1 <= start <= end <= len(park_list)):
+                        print("Ошибка! Диапазон вне допустимых границ.")
+                        continue
+
+                    selected_parks = park_list[start - 1:end]
+                    count_last_protocol = int(input("\nУкажите количество последних протоколов для сравнения (0, если все): "))
+
+                    print(f"\nОбновление по паркам: {', '.join(selected_parks)}")
+                    update_recent_by_count.find_dif_details_protocol(count_last_protocol, selected_parks)
+                    break
+
+                except (ValueError, IndexError):
+                    print("Ошибка! Проверьте вводимые значения (целые числа в допустимом диапазоне).")
+
+            elif sub_choice == '3':
+                park_list = update_data_main.list_point_update()
+                for i, park in enumerate(park_list, 1):
+                    print(f"{i}. {park}")
+
+                try:
+                    park_choice = int(input("\nВыберите номер парка: "))
+                    if not (1 <= park_choice <= len(park_list)):
+                        print("Ошибка! Неверный номер парка.")
+                        continue
+
+                    name_point = park_list[park_choice - 1]
+                    count_last_protocol = int(input("\nУкажите количество последних протоколов для сравнения (0, если все): "))
+                    update_recent_by_count.find_dif_details_protocol(count_last_protocol, [name_point])
+                    break
+
+                except (ValueError, IndexError):
+                    print("Ошибка! Проверьте правильность номера парка и количества.")
+
+            else:
+                print("Неверный ввод. Попробуйте снова.")
+
+        else:
+            print("Неверный ввод. Попробуйте снова.")
