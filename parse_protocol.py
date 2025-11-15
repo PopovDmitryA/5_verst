@@ -1,14 +1,60 @@
 import pandas as pd
 import requests, re
 from bs4 import BeautifulSoup
+import time
+from io import StringIO
 
-def identification_park_date(link, t):
+UA_HDRS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/127.0.0 Safari/537.36"),
+    "Accept-Language": "ru,en;q=0.9",
+    "Referer": "https://5verst.ru/",
+}
+
+def _fetch_html(url: str, tries: int = 3, pause: float = 2.0) -> str:
+    # 1) обычный requests с нормальными заголовками
+    for i in range(tries):
+        try:
+            r = requests.get(url, headers=UA_HDRS, timeout=20, allow_redirects=True)
+            if r.status_code == 200:
+                if not r.encoding or r.encoding.lower() == "iso-8859-1":
+                    r.encoding = r.apparent_encoding
+                return r.text
+            # 403/429 — подождать и попробовать снова
+            if r.status_code in (403, 429):
+                time.sleep(pause * (i + 1))
+                continue
+            r.raise_for_status()
+        except Exception:
+            time.sleep(pause * (i + 1))
+
+    # 2) fallback: cloudscraper (если стоит Cloudflare/WAF)
+    try:
+        import cloudscraper
+        scraper = cloudscraper.create_scraper()
+        r = scraper.get(url, timeout=30)
+        if r.status_code == 200:
+            return r.text
+        raise RuntimeError(f"cloudscraper status={r.status_code}")
+    except Exception as e:
+        raise RuntimeError(f"Не удалось получить HTML: {e}")
+
+def identification_park_date(link, soup):#t):
     '''Определяем название парка и дату пробежки'''
     date_event = link.split('/')[5]
-    soup = BeautifulSoup(t.text, 'html.parser').find('div', class_='page-header page-results-header')
-    for link_run in soup.find_all('h1'):
-        k = link_run.text
-    name_point = k.split('Протокол 5 вёрст')[1].split('(')[0].strip()
+    header_div = soup.find('div', class_='page-header page-results-header')
+    name_point = None
+    #soup = BeautifulSoup(t.text, 'html.parser').find('div', class_='page-header page-results-header')
+
+    if header_div:
+        for link_run in header_div.find_all('h1'):
+            k = link_run.text
+        if k:
+            name_point = k.split('Протокол 5 вёрст')[1].split('(')[0].strip()
+    # for link_run in soup.find_all('h1'):
+    #     k = link_run.text
+    # name_point = k.split('Протокол 5 вёрст')[1].split('(')[0].strip()
     return date_event, name_point
 
 def slice_before_parenthesis(value):
@@ -59,32 +105,30 @@ def processing_vol(df_vol, date_event, name_point):
 
     return df_vol_copy
 
-def parse_vol(t):
-    '''Парсинг волонтеров сбор df из полученных данных и возврат сырой таблицы'''
-    soup_vol = BeautifulSoup(t.text, 'html.parser')
-    table_vol = soup_vol.find('table',
-                              {'class': 'sortable n-last results-table min-w-full leading-normal'})
+def parse_vol(soup):
+    """Парсинг волонтеров, возврат DataFrame"""
+    table_vol = soup.find(
+        'table',
+        {'class': 'sortable n-last results-table min-w-full leading-normal'}
+    )
+    if not table_vol:
+        return pd.DataFrame()
+
     rows = table_vol.find_all('tr')
     data = []
-    for index, row in enumerate(rows):
+    for row in rows:
         cols = row.find_all('td')
-        if len(cols) == 0: continue
-
+        if not cols:
+            continue
         cols = [col.text.strip() for col in cols]
-        try:
-            find_link = row.find('a')
+        find_link = row.find('a')
+        if find_link:
             name_runner, link_runner = find_link.text, find_link.get('href')
             cols += [name_runner, link_runner]
-        except:
-            pass
         data.append(cols)
-    columns = ['Участник',
-               'vol_role',
-               'name_runner',
-               'link_runner']
-    df_vol = pd.DataFrame(data, columns=columns)
 
-    return df_vol
+    columns = ['Участник', 'vol_role', 'name_runner', 'link_runner']
+    return pd.DataFrame(data, columns=columns)
 
 def processing_run(df_run_link, date_event, name_point):
     '''Формируем финальный формат df пробежки для БД'''
@@ -120,51 +164,47 @@ def processing_run(df_run_link, date_event, name_point):
 
     return df_run_copy
 
-def parse_runner(t):
-    '''Парсинг таблицы с бегунами и возврат сырой таблицы df'''
-    soup_run = BeautifulSoup(t.text, 'html.parser')
-    table_runner = soup_run.find('table',
-                                 {'class': 'sortable n-last results-table results-table_with-sticky-head min-w-full leading-normal'})
+def parse_runner(soup):
+    """Парсинг таблицы с бегунами и возврат сырого DataFrame"""
+    table_runner = soup.find(
+        'table',
+        {'class': 'sortable n-last results-table results-table_with-sticky-head min-w-full leading-normal'}
+    )
+    if not table_runner:
+        return pd.DataFrame()  # защита
+
     rows = table_runner.find_all('tr')
     data = []
-    for index, row in enumerate(rows):
+    for row in rows:
         cols = row.find_all('td')
-        # Пропускаем строки без данных
         if not cols:
             continue
-
         cols = [col.text.strip() for col in cols]
-        try:
-            find_link = row.find('a')
+        find_link = row.find('a')
+        if find_link:
             name_runner, link_runner = find_link.text, find_link.get('href')
             cols += [name_runner, link_runner]
-        except AttributeError:
-            pass  # Ничего не делаем, если ссылка отсутствует
         data.append(cols)
 
-    columns = ['position',
-               'Участник',
-               'Возрастной рейтинг',
-               'finish_time',
-               'name_runner',
-               'link_runner']
-    df_run_link = pd.DataFrame(data, columns=columns)
-
-    return df_run_link
+    columns = ['position', 'Участник', 'Возрастной рейтинг', 'finish_time', 'name_runner', 'link_runner']
+    return pd.DataFrame(data, columns=columns)
 
 def parse_protocol(link):
-    '''Функция, возвращающая сырые 2 DF со страницы с протоколом и дату с именем локации'''
-    parse_site = pd.read_html(link)  # Парсим табличку
-    t = requests.get(link)  # Парсим страницу
+    """Возвращает сырые 2 DF со страницы с протоколом и дату с именем локации"""
+    html = _fetch_html(link)
+    soup = BeautifulSoup(html, 'lxml')
 
-    date_event, name_point = identification_park_date(link, t)
+    # таблицы можно при желании оставить через read_html, если нужно что-то общее
+    parse_site = pd.read_html(StringIO(html), flavor="lxml")
 
-    if len(parse_site) == 1:  # Если волонтерства не отгружены
-        df_run = parse_runner(t)
+    date_event, name_point = identification_park_date(link, soup)
+
+    if len(parse_site) == 1:
+        df_run = parse_runner(soup)
         df_vol = False
     else:
-        df_run = parse_runner(t)
-        df_vol = parse_vol(t)
+        df_run = parse_runner(soup)
+        df_vol = parse_vol(soup)
 
     return df_run, df_vol, date_event, name_point
 

@@ -2,11 +2,16 @@ import configparser
 import pandas as pd
 from tqdm import tqdm
 import sqlalchemy as sa
+from pathlib import Path
 import link_handler as lh
 import parse_table_protocols_in_park as ptpp
 
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+CONFIG_PATH = PROJECT_ROOT / "5_verst.ini"
+
 config = configparser.ConfigParser()
-config.read('/Users/dmitry/PycharmProjects/5_verst/5_verst.ini')
+config.read(CONFIG_PATH)
 
 db_host = config['five_verst_stats']['host']
 db_user = config['five_verst_stats']['username']

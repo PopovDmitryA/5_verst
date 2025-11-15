@@ -3,42 +3,65 @@ import link_handler
 import parse_last_running as plr
 import parse_protocol as pp
 import parse_table_protocols_in_park as ptpp
+from update_protocols import update_data_protocols
 
 import pandas as pd
 import time
+import random
 from tqdm import tqdm
 
 def check_new_protocols(credential):
-    '''Получаем данные протоколов, которые можно внести в БД'''
-    #Получаем данные со списком протоколов
+    """Получаем данные протоколов, которые можно внести в БД"""
     engine = db.db_connect(credential)
     df = db.get_table(engine, 'list_all_events', 'index_event, name_point, date_event, link_event, is_test')
     df['link_point'] = df['link_event'].apply(link_handler.main_link_event)
     df = df.drop(columns=['link_event'])
-    db_data = df[["index_event", "name_point", "date_event", "link_point", "is_test"]]
+    db_data = df[['index_event', 'name_point', 'date_event']].copy()
 
-    #Парсим последние протоколы
+    # Парсим последние протоколы
     last_event = plr.transform_df_last_event(plr.last_event_parse())
 
-    #Формируем таблицу, идентичную по структуре таблице из БД для сравнения
-    compare_event = last_event[['index_event', 'name_point', 'date_event', 'link_point', 'is_test']].copy()
+    # Формируем таблицу для сравнения
+    compare_event = last_event[['index_event', 'name_point', 'date_event']].copy()
 
-    # Объединяем датафреймы с помощью merge и добавляем индикатор совпадений
-    merged_df = pd.merge(compare_event, db_data, how='left', indicator=True)
+    # Слияние и поиск отсутствующих строк
+    merged_df = compare_event.merge(
+        db_data,
+        on=['index_event', 'name_point', 'date_event'],
+        how='left',
+        indicator=True
+    )
+    missing_rows = merged_df[merged_df['_merge'] == 'left_only'].copy()
+    missing_rows = missing_rows.drop(columns=['_merge'])
+    new_data = missing_rows.merge(
+        last_event,
+        on=['index_event', 'name_point', 'date_event'],
+        how='left'
+    )
 
-    # Отбираем строки, которых нет в df2
-    missing_rows = merged_df[merged_df['_merge'] == 'left_only']
+    # Определяем, как называется колонка со ссылкой в last_event/new_data
+    if 'link_event' in last_event.columns:
+        link_col = 'link_event'
+    elif 'link_point' in last_event.columns:
+        link_col = 'link_point'
+    else:
+        raise KeyError("Не найдена колонка ссылки ни 'link_event', ни 'link_point' в last_event")
 
-    # Убираем лишний столбец с индикатором
-    new_data = missing_rows.drop('_merge', axis=1)
+    # Проверяем, что аналогичная колонка есть в new_data
+    if link_col not in new_data.columns:
+        alt = 'link_point' if link_col == 'link_event' else 'link_event'
+        if alt in new_data.columns:
+            new_data = new_data.rename(columns={alt: link_col})
+        else:
+            print(f"⚠️ В new_data нет поля '{link_col}', создаём пустое")
+            new_data[link_col] = None
 
-    #По индексу фильтруем данные из спаршенной таблицы, чтобы подготовить данные для внесения в БД
-    # Переменная с порядком столбцов
+    # Порядок столбцов
     column_order = [
         'index_event',
         'name_point',
         'date_event',
-        'link_event',
+        link_col,
         'is_test',
         'count_runners',
         'count_vol',
@@ -46,34 +69,64 @@ def check_new_protocols(credential):
         'best_time_woman',
         'best_time_man'
     ]
-    finish_df = last_event.loc[new_data.index, column_order]
+    column_order = [c for c in column_order if c in last_event.columns]
+
+    # Ключевые поля
+    keys = ['index_event', 'name_point', 'date_event', link_col, 'is_test']
+    keys = [k for k in keys if k in new_data.columns and k in last_event.columns]
+
+    # Финальный df для вставки в БД
+    finish_df = (
+        last_event[column_order]
+        .merge(new_data[keys], on=keys, how='inner')
+    )
 
     # сохраняем исходный df с сайта и получаем аналогичный из БД, чтобы их сравнить
     for_find_dif = last_event[column_order]
-    now_db_last_protocols = pd.DataFrame()
+    frames = []
+
     for _, row in for_find_dif.iterrows():
-        сondition = [{'name_point': row['name_point']}, {'date_event': row['date_event']}]  # Формируем условие
-        temp_now_protocol = db.get_inf_with_condition(engine, 'list_all_events', сondition)
-        now_db_last_protocols = pd.concat([now_db_last_protocols, temp_now_protocol], ignore_index=True)
-    now_db_last_protocols = now_db_last_protocols.drop(columns=['updated_at'])
+        condition = [{'name_point': row['name_point']}, {'date_event': row['date_event']}]
+        temp_now_protocol = db.get_inf_with_condition(engine, 'list_all_events', condition)
+
+        # Добавляем только если не пустой и не состоит полностью из NaN
+        if not temp_now_protocol.empty and not temp_now_protocol.isna().all(axis=None):
+            frames.append(temp_now_protocol)
+
+    # Объединяем один раз — без предупреждений и быстрее
+    if frames:
+        now_db_last_protocols = pd.concat(frames, ignore_index=True)
+    else:
+        now_db_last_protocols = pd.DataFrame()
+
+    # Удаляем служебные колонки, если они есть
+    if 'updated_at' in now_db_last_protocols.columns:
+        now_db_last_protocols = now_db_last_protocols.drop(columns=['updated_at'])
 
     return finish_df, for_find_dif, now_db_last_protocols
 
 def get_list_protocol(new_data):
-    '''В цикле проходимся по каждой строчке df, со ссылками на протоколы, парсим сами протоколы и собираем это в единую таблицу'''
+    """
+    В цикле проходимся по каждой строке df со ссылками на протоколы,
+    парсим сами протоколы и собираем это в единую таблицу.
+    После каждой итерации добавляется случайная задержка от 10 до 20 секунд.
+    """
     data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
-    counter = 0
+
     for _, row in new_data.iterrows():
-        if counter >= 50:
-            print('Сплю 30 сек')
-            time.sleep(30)
-            counter = 0
         link = row['link_event']
         final_df_run, final_df_vol = pp.main_parse(link)
         data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
         data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
-        print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
-        counter += 1
+
+        print(f'\t{row["date_event"]} - {row["name_point"]}: '
+              f'{row["count_runners"]} участников, {row["count_vol"]} волонтеров')
+
+        # 💤 случайная задержка между запросами
+        delay = random.uniform(10, 20)
+        print(f'Пауза {delay:.1f} сек перед следующим протоколом...')
+        time.sleep(delay)
+
     return data_protocols, data_protocol_vol
 
 def add_new_protocols(credential, new_data, data_protocols, data_protocol_vol):
@@ -131,39 +184,58 @@ def get_list_all_protocol(credential):
         link = link_handler.link_all_result_event(row['link_point'])
         all_point_protocol = ptpp.transform_df_list_protocol(ptpp.list_protocols_in_park(link))
         empty_df = pd.concat([empty_df, all_point_protocol], ignore_index=True)
+
+        # Задержка от 10 до 20 секунд
+        delay = random.uniform(10, 20)
+        time.sleep(delay)
     #print(len(empty_df), len(table))
     print('Спарсили списки всех протоколов для сравнения')
     return empty_df, table
 
 def find_dif_list_protocol(list_site_protocols, now_table):
-    '''Функция сравнивает два dataframe и выводит значения из list_site_protocols, которые отличны в таблице now_table, возвращает готовый для update df.
-    Предварительно функция удаляет протоколы, которые еще не обрабатывались основным скриптом и не вносилась информация в БД о них'''
+    """
+    Функция сравнивает два DataFrame и выводит значения из list_site_protocols,
+    которые отсутствуют в now_table (эти протоколы ещё не обработаны),
+    а затем возвращает строки, которые требуют обновления.
+    """
 
-    # Создаем временный DataFrame с нужными колонками для сравнения
-    temp_list_site_protocols = list_site_protocols[['name_point', 'date_event']]
-    temp_now_table = now_table[['name_point', 'date_event']]
+    # Нормализуем формат дат для надёжного merge
+    list_site_protocols = list_site_protocols.copy()
+    now_table = now_table.copy()
 
-    # Объединяем temp_empty_df и temp_table по нужным столбцам
-    diff_right_new = temp_list_site_protocols.merge(temp_now_table, on=['name_point', 'date_event'], how='left', indicator=True)
+    list_site_protocols['date_event'] = pd.to_datetime(list_site_protocols['date_event'], errors='coerce')
+    now_table['date_event'] = pd.to_datetime(now_table['date_event'], errors='coerce')
 
-    # Фильтруем записи, существующие только слева (левое слияние)
-    diff_right_new = diff_right_new[diff_right_new['_merge'] == 'left_only']
+    # Шаг 1. Находим протоколы, которых ещё нет в БД → их нужно исключить из сравнения
+    temp_list = list_site_protocols[['name_point', 'date_event']]
+    temp_now = now_table[['name_point', 'date_event']]
 
-    if len(diff_right_new) != 0:
+    diff_right_new = temp_list.merge(
+        temp_now,
+        on=['name_point', 'date_event'],
+        how='left',
+        indicator=True
+    )
+
+    missing = diff_right_new.query('_merge == "left_only"')[['name_point', 'date_event']]
+
+    if not missing.empty:
         print('Есть протокол, не записанный в БД')
-        print(diff_right_new)
-        # Получаем индексы записей, уникальные для left_dataframe
-        unique_indices = diff_right_new.index
+        print(missing)
 
-        # Удаляем эти записи из original dataframe
-        list_site_protocols = list_site_protocols.drop(unique_indices).reset_index(drop=True)
+        # Удаляем эти строки по значениям, НЕ по индексу
+        list_site_protocols = list_site_protocols.merge(
+            missing,
+            on=['name_point', 'date_event'],
+            how='left',
+            indicator=True
+        ).query('_merge == "left_only"').drop(columns=['_merge']).reset_index(drop=True)
 
-    #Производим фильтрацию по всем столбцам, чтобы отобрать строчки, которые требуют обновления
+    # Шаг 2. Теперь ищем строки, которые есть на сайте, но отличаются в БД → их нужно обновить
     diff_right = list_site_protocols.merge(now_table, how='left', indicator=True)
-    diff_right = diff_right[diff_right['_merge'] == 'left_only'].drop('_merge', axis=1)
-    diff_right = diff_right.sort_values(by = ['date_event', 'name_point'], ascending=True)
+    diff_right = diff_right.query('_merge == "left_only"').drop(columns=['_merge'])
 
-    return diff_right
+    return diff_right.sort_values(by=['date_event', 'name_point'], ascending=True).reset_index(drop=True)
 
 def get_now_protocols(credential, different_list_of_protocols):
     '''Функция собирает 2 df с текущей информацией из протоколов, которая находится в БД'''
@@ -255,3 +327,98 @@ def create_list_for_compare(credential):
     result = db.execute_request(engine, request)
     values_list = result.iloc[:, 0].tolist()
     return values_list
+
+def record_or_update_protocol_by_link(credential: str, link: str):
+    """
+    По ссылке формата https://5verst.ru/<slug_парка>/results/DD.MM.YYYY/
+    парсит протокол, определяет парк и дату, проверяет наличие в БД,
+    вставляет недостающие данные или актуализирует расхождения.
+    """
+
+    # 1) Спарсить протокол → DF бегунов/волонтёров (как в твоём pipeline)
+    final_df_run, final_df_vol = pp.main_parse(link)  # форматы под details_protocol / details_vol :contentReference[oaicite:0]{index=0}
+    name_point = final_df_run["name_point"].iloc[0]
+    date_event = final_df_run["date_event"].iloc[0]
+
+    # 2) Получить строку для list_all_events из страницы «all results» парка
+    main_link = link_handler.main_link_event(link)                            # базовая ссылка парка :contentReference[oaicite:1]{index=1}
+    all_results_link = link_handler.link_all_result_event(main_link)          # .../results/all/ :contentReference[oaicite:2]{index=2}
+    list_df_full = ptpp.transform_df_list_protocol(
+        ptpp.list_protocols_in_park(all_results_link)
+    )  # даёт столбцы под list_all_events (index_event, count_runners, ...) :contentReference[oaicite:3]{index=3}
+
+    list_row = list_df_full[
+        (list_df_full["name_point"] == name_point) &
+        (list_df_full["date_event"] == pd.to_datetime(date_event))
+    ].copy()
+
+    # --- ВАЖНО: если в /results/all/ строки нет → прекращаем ---
+    if list_row.empty:
+        print("❌ Протокол не найден на странице всех результатов парка (/results/all/).")
+        print("   Скорее всего ссылка указывает на тестовый/временный/неофициальный протокол,")
+        print("   или на странице ещё не появилось обновление (ожидайте публикации).")
+        print("   Запись/обновление в БД прервана.")
+        return
+
+    # 3) Проверить наличие протокола в БД по name_point + date_event
+    engine = db.db_connect(credential)
+    existing = db.get_inf_with_condition(
+        engine, "list_all_events",
+        [{"name_point": name_point}, {"date_event": date_event}]
+    )  # выборка по ключу протокола :contentReference[oaicite:4]{index=4}
+
+    if existing is None or existing.empty:
+        # Новая запись
+        for_removal_runner = pd.DataFrame(columns=["name_point","date_event","position"])
+        for_removal_vol = pd.DataFrame(columns=["name_point","date_event","user_id","vol_role"])
+        to_add_runner = final_df_run.copy()
+        to_add_vol = (pd.DataFrame(columns=["name_point","date_event","name_runner","link_runner","user_id","vol_role"])
+                      if final_df_vol is None else final_df_vol.copy())
+        different_list_of_protocols = list_row.copy()  # чтобы через единый коммит записать строку list_all_events
+
+        update_data_protocols(
+            credential,
+            for_removal_runner, for_removal_vol,
+            to_add_runner, to_add_vol,
+            different_list_of_protocols
+        )  # транзакция + refresh вьюх (как у тебя принято) :contentReference[oaicite:5]{index=5}
+        print(f"✅ Добавлен новый протокол: {name_point} — {pd.to_datetime(date_event).date()}")
+        return
+
+    # 4) Актуализация: сверить детали и строку list_all_events
+    this_proto = pd.DataFrame([{"name_point": name_point, "date_event": date_event}])
+    now_run, now_vol = get_now_protocols(credential, this_proto)              # выгрузка текущих деталей из БД :contentReference[oaicite:6]{index=6}
+
+    for_removal_runner, to_add_runner = find_dif_protocol(final_df_run, now_run)  # дельты бегунов :contentReference[oaicite:7]{index=7}
+    # учёт случая отсутствия блока волонтёров на сайте
+    if final_df_vol is None:
+        actual_vol = pd.DataFrame(columns=now_vol.columns) if not now_vol.empty else pd.DataFrame(
+            columns=["name_point","date_event","name_runner","link_runner","user_id","vol_role"]
+        )
+    else:
+        actual_vol = final_df_vol
+    for_removal_vol, to_add_vol = find_dif_protocol(actual_vol, now_vol)          # дельты волонтёров :contentReference[oaicite:8]{index=8}
+
+    # Проверить, отличается ли строка list_all_events (если да — заменим)
+    need_replace_list = False
+    cols_to_check = [c for c in list_row.columns if c in existing.columns and c != "updated_at"]
+    if not list_row[cols_to_check].equals(existing[cols_to_check]):
+        need_replace_list = True
+        different_list_of_protocols = list_row.copy()
+    else:
+        different_list_of_protocols = pd.DataFrame()
+
+    if (len(for_removal_runner) == 0 and len(to_add_runner) == 0 and
+        len(for_removal_vol) == 0 and len(to_add_vol) == 0 and
+        not need_replace_list):
+        print("ℹ️ В БД уже актуальная информация по данному протоколу.")
+        return
+
+    update_data_protocols(
+        credential,
+        for_removal_runner, for_removal_vol,
+        to_add_runner, to_add_vol,
+        different_list_of_protocols
+    )  # удалим лишнее / добавим недостающее / при необходимости заменим строку list_all_events :contentReference[oaicite:9]{index=9}
+
+    print(f"✅ Обновлён протокол: {name_point} — {pd.to_datetime(date_event).date()}")

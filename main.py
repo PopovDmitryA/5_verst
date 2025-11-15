@@ -1,4 +1,6 @@
-from schedule_scripts import record_latest_protocol, update_all_protocols, update_recent_by_count, update_data_main, update_FIO
+from schedule_scripts import record_latest_protocol, update_all_protocols, \
+    update_recent_by_count, update_data_main, update_FIO, record_by_link
+
 
 if __name__ == "__main__":
     while True:
@@ -6,8 +8,9 @@ if __name__ == "__main__":
             "\nВыберите способ обновления данных:\n"
             "1 — Запустить обновление по последним протоколам\n"
             "2 — Сравнить и обновить по саммари всех протоколов\n"
-            '3 - Актуализировать ФИО участников, если были изменения\n'
+            "3 — Актуализировать ФИО участников, если были изменения\n"
             "4 — Сравнить последние X протоколов\n"
+            "5 — Записать/актуализировать протокол по ссылке\n"
             "Ваш выбор: "
         )
 
@@ -84,6 +87,10 @@ if __name__ == "__main__":
 
             else:
                 print("Неверный ввод. Попробуйте снова.")
+
+        elif choice == '5':
+            record_by_link.record_by_link()
+            break
 
         else:
             print("Неверный ввод. Попробуйте снова.")

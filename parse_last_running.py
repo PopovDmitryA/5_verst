@@ -6,8 +6,21 @@ from bs4 import BeautifulSoup
 
 def last_event_parse():
     '''Парсим страницу с последними пробежками всех парков'''
-    page = 'https://5verst.ru/results/latest/'
-    t = requests.get(page)
+    #page = 'https://5verst.ru/results/latest/'
+
+    url = "https://5verst.ru/results/latest/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/127.0.0.1 Safari/537.36",
+        "Accept-Language": "ru,en;q=0.9",
+        "Referer": "https://5verst.ru/",
+    }
+
+    t = requests.get(url, headers=headers, timeout=15)
+    #print(r.status_code)
+
+    #t = requests.get(page)
     soup = BeautifulSoup(t.text, 'html.parser')
 
     table_last_event = soup.find('table', {'class': 'sortable results-table min-w-full leading-normal'})

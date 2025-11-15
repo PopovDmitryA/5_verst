@@ -1,10 +1,15 @@
 import configparser
 from update_data_functions import get_list_protocol, get_now_protocols, find_dif_protocol, create_list_for_compare
 from update_protocols import update_data_protocols
+from pathlib import Path
 import pandas as pd
 
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+CONFIG_PATH = PROJECT_ROOT / "5_verst.ini"
+
 config = configparser.ConfigParser()
-config.read('/Users/dmitry/PycharmProjects/5_verst/5_verst.ini')
+config.read(CONFIG_PATH)
 
 db_host = config['five_verst_stats']['host']
 db_user = config['five_verst_stats']['username']
