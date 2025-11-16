@@ -5,17 +5,32 @@ from aiogram.types import (
 
 def main_menu(consent_accepted: bool):
     rows = []
-    # Согласие показываем ТОЛЬКО если ещё не дано
     if not consent_accepted:
-        rows.append([KeyboardButton(text="📝 Согласие")])
+        rows.append([KeyboardButton(text="⚙️ Настройки")])
+        rows.append([KeyboardButton(text="📊 Дэшборды")])
+        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+    # Когда согласие есть:
     rows.extend([
-        [KeyboardButton(text="👤 Профиль")],
+        # [KeyboardButton(text="👤 Профиль")]  # пока скрыто
         [KeyboardButton(text="🪪 Профиль 5 вёрст")],
-        [KeyboardButton(text="👥 Клубы")],
-        [KeyboardButton(text="ℹ️ Описание")],
-        [KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="📊 Дэшборды")],
+        [KeyboardButton(text="⚙️ Настройки")],
     ])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def settings_kb(consent_accepted: bool, news_subscribed: bool):
+    consent_icon = "✅" if consent_accepted else "❌"
+    news_icon = "✅" if news_subscribed else "❌"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"Согласие на обработку перс. данных: {consent_icon}", callback_data="settings:consent")],
+            [InlineKeyboardButton(text=f"Рассылка о новостях: {news_icon}", callback_data="settings:news")],
+            [InlineKeyboardButton(text="Вернуться в главное меню", callback_data="settings:close")],
+        ]
+    )
 
 def consent_kb():
     return InlineKeyboardMarkup(
@@ -25,13 +40,16 @@ def consent_kb():
         ]
     )
 
-def confirm_profile_kb(uid: int):
+def confirm_profile_kb(uid: str):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Да, привязать", callback_data=f"profile:confirm:{uid}")],
-            [InlineKeyboardButton(text="Нет", callback_data="profile:cancel")]
+            [
+                InlineKeyboardButton(text="Да", callback_data=f"bind:confirm:{uid}"),
+                InlineKeyboardButton(text="Нет", callback_data="bind:cancel"),
+            ]
         ]
     )
+
 
 def clubs_kb(clubs: list[str], page: int = 0, per_page: int = 12):
     total = len(clubs)
@@ -65,14 +83,29 @@ def clubs_actions_kb(has_club: bool):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def profile5v_actions_kb():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Привязать / изменить профиль", callback_data="p5v:action:bind")],
-            [InlineKeyboardButton(text="Отвязать профиль", callback_data="p5v:action:unbind")],
-            [InlineKeyboardButton(text="Отмена", callback_data="p5v:action:cancel")],
-        ]
-    )
+def profile5v_actions_kb(has_profile: bool, has_club: bool):
+    rows = []
+
+    # Профиль
+    rows.append([InlineKeyboardButton(
+        text="Привязать профиль" if not has_profile else "Привязать / изменить профиль",
+        callback_data="p5v:action:bind"
+    )])
+
+    if has_profile:
+        rows.append([InlineKeyboardButton(text="Отвязать профиль", callback_data="p5v:action:unbind")])
+
+    # Клубы – показываем ВСЕГДА
+    if not has_profile:
+        # профиль не привязан → клубы недоступны
+        rows.append([InlineKeyboardButton(text="Клубы (недоступно)", callback_data="p5v:club:no_profile")])
+    else:
+        rows.append([InlineKeyboardButton(text="Привязать / изменить клуб", callback_data="clubs:action:set")])
+        if has_club:
+            rows.append([InlineKeyboardButton(text="Отвязать клуб", callback_data="clubs:action:unlink")])
+
+    rows.append([InlineKeyboardButton(text="Отмена", callback_data="p5v:action:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def confirm_unlink_club_kb():
     return InlineKeyboardMarkup(
@@ -81,3 +114,64 @@ def confirm_unlink_club_kb():
              InlineKeyboardButton(text="Нет", callback_data="club:cancel_unlink")]
         ]
     )
+
+def dashboards_root_kb():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📍 Локации", callback_data="dash:cat:loc")],
+            [InlineKeyboardButton(text="🧳 Паркран-туристы", callback_data="dash:cat:tour")],
+            [InlineKeyboardButton(text="🏃 Все участники", callback_data="dash:cat:all")],
+        ]
+    )
+
+
+def dashboards_cat_kb(category: str):
+    rows = []
+    if category == "loc":
+        rows = [
+            [InlineKeyboardButton(text="Статистика по локациям",
+                                  url="https://run5k.run/d/bepnuz4ecveo0f/statistika-po-lokacijam")],
+            [InlineKeyboardButton(text="Рейтинг участников и волонтёров внутри локации",
+                                  url="https://run5k.run/d/ae5xf2cebu3gga/rejting-uchastnikov-i-volontjorov-vnutri-lokacii")],
+            [InlineKeyboardButton(text="Долгая пауза",
+                                  url="https://run5k.run/d/cea88eb2-47e4-4334-bfd6-e13ad11f5e3a/dolgaja-pauza")],
+            [InlineKeyboardButton(text="Календарь первых стартов локаций 5 вёрст",
+                                  url="https://run5k.run/d/eeqquzpgqp88wd/kalendar--pervyh-startov-lokacij-5-vjorst")],
+        ]
+    elif category == "tour":
+        rows = [
+            [InlineKeyboardButton(text="Карта туристов",
+                                  url="https://run5k.run/d/de1hu8dabny80c/karta-turistov")],
+            [InlineKeyboardButton(text="Карта туристов волонтёров",
+                                  url="https://run5k.run/d/de96ruht0r0n4c/karta-turistov-volonterov")],
+            [InlineKeyboardButton(text="Рейтинг по количеству уникальных локаций",
+                                  url="https://run5k.run/d/fehx3pjkvj56oa/rejting-po-kolichestvu-unikal-nyh-lokacij")],
+            [InlineKeyboardButton(text="Рейтинг расстояния посещённых локаций от Москвы",
+                                  url="https://run5k.run/d/dekvyyrwadwjkb/89bc50f")],
+            [InlineKeyboardButton(text="Прогноз даты завершения туризма",
+                                  url="https://run5k.run/d/eednttn3wos1sf/prognoz-daty-zavershenija-turizma")],
+        ]
+    elif category == "all":
+        rows = [
+            [InlineKeyboardButton(text="Рейтинг количества пробежек",
+                                  url="https://run5k.run/d/beb3dpef24r28a/rejting-kolichestva-probezhek")],
+            [InlineKeyboardButton(text="Рейтинг количества волонтёрств",
+                                  url="https://run5k.run/d/feb3hdye0fhtse/rejting-kolichestva-volonterstv")],
+            [InlineKeyboardButton(text="Счёт по личным встречам (пересечения)",
+                                  url="https://run5k.run/d/86bf8188-e70b-4e14-8997-6a8893142f55/schjot-po-lichnym-vstrecham")],
+            [InlineKeyboardButton(text="Челленджи",
+                                  url="https://run5k.run/d/3e54a2d8-ef9f-4743-8117-4a2ddb47d6a7/chellendzhi")],
+            [InlineKeyboardButton(text="Клубы 5 вёрст",
+                                  url="https://run5k.run/d/03450385-0269-4509-873f-1423067b5c7f/kluby-5-vjorst")],
+            [InlineKeyboardButton(text="Рекорды по возрастным группам в локациях",
+                                  url="https://run5k.run/d/d615a771-0ea5-4559-ac97-536e08662a96/rekordy-po-vozrastnym-gruppam-v-lokacijah")],
+            [InlineKeyboardButton(text="Рейтинг победителей на пробежках",
+                                  url="https://run5k.run/d/feitbfpcwwb28a/rejting-pobeditelej-na-probezhkah")],
+            [InlineKeyboardButton(text="Рейтинг по времени финиша",
+                                  url="https://run5k.run/d/deprgii19fdoga/rejting-po-vremeni-finisha")],
+            [InlineKeyboardButton(text="Единый протокол",
+                                  url="https://run5k.run/d/4a385e6f-5cb6-4e7d-914f-8fbee0b34bba/edinyj-protokol")],
+        ]
+    # Кнопка назад на корневой уровень
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="dash:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

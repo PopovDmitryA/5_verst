@@ -70,6 +70,14 @@ def set_consent(tg_user_id: int, accepted: bool):
             WHERE tg_user_id=:u
         """), {"acc": accepted, "u": tg_user_id})
 
+def set_news_subscribed(tg_user_id: int, subscribed: bool):
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE tg_user_profile
+            SET news_subscribed = :sub
+            WHERE tg_user_id = :u
+        """), {"sub": subscribed, "u": tg_user_id})
+
 def next_time_after(last_dt) -> Optional[datetime]:
     if not last_dt:
         return None
