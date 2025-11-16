@@ -102,10 +102,36 @@ async def on_start(message: Message):
         )
 
     else:
-        # ✔️ Согласие есть, ✔️ профиль есть
-        fio = f"<b>{name_txt}</b>" if name_txt else f"ID <code>{uid}</code>"
-        club_txt = f"\nКлуб: <b>{club}</b>" if club else "\nКлуб: не выбран"
-        tail = f"\n\nПрофиль: {fio}{club_txt}"
+        # ✔️ Согласие есть, ✔️ профиль 5В привязан
+        profile_url = f"https://5verst.ru/userstats/{uid}/"
+
+        # Челленджи по user_id
+        challenge_url = (
+            "https://run5k.run/d/"
+            "3e54a2d8-ef9f-4743-8117-4a2ddb47d6a7/chellendzhi"
+            f"?var-name={uid}"
+        )
+
+        # Кликабельный клуб, если выбран
+        if club:
+            encoded = urllib.parse.quote(club)
+            club_url = (
+                "https://run5k.run/d/"
+                "03450385-0269-4509-873f-1423067b5c7f/kluby-5-vjorst"
+                f"?var-Club5={encoded}"
+            )
+            club_txt = f"\n<b>Клуб:</b> <a href=\"{club_url}\">{club}</a>"
+        else:
+            club_txt = "\n<b>Клуб:</b> не выбран"
+
+        name_html = name_txt or f"ID {uid}"
+        tail = (
+            "\n\n"
+            f"<b>Профиль:</b> <a href=\"{profile_url}\">{name_html}</a>\n"
+            f"<b>Челленджи:</b> "
+            f"<a href=\"{challenge_url}\">перейти</a>"
+            f"{club_txt}"
+        )
 
         # Добавляем подсказку о подписке (только если НЕ подписан)
         if not row.get('news_subscribed'):
@@ -628,7 +654,7 @@ async def p5v_root(message: Message):
 
         # ❗ БЕЗ "Профиль привязан ✅" здесь
         text += f"<b>Профиль:</b> <a href=\"{profile_url}\">{name_txt}</a>\n"
-        text += f"<b>Челленджи:</b> <a href=\"{challenge_url}\">страница ваших челленджей</a>\n"
+        text += f"<b>Челленджи:</b> <a href=\"{challenge_url}\">перейти</a>\n"
 
         if has_club:
             encoded = urllib.parse.quote(club)
