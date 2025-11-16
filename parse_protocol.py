@@ -2,6 +2,8 @@ import pandas as pd
 import requests, re
 from bs4 import BeautifulSoup
 import time
+import logging
+import cloudscraper
 from io import StringIO
 
 UA_HDRS = {
@@ -12,33 +14,61 @@ UA_HDRS = {
     "Referer": "https://5verst.ru/",
 }
 
-def _fetch_html(url: str, tries: int = 3, pause: float = 2.0) -> str:
-    # 1) обычный requests с нормальными заголовками
-    for i in range(tries):
-        try:
-            r = requests.get(url, headers=UA_HDRS, timeout=20, allow_redirects=True)
-            if r.status_code == 200:
-                if not r.encoding or r.encoding.lower() == "iso-8859-1":
-                    r.encoding = r.apparent_encoding
-                return r.text
-            # 403/429 — подождать и попробовать снова
-            if r.status_code in (403, 429):
-                time.sleep(pause * (i + 1))
-                continue
-            r.raise_for_status()
-        except Exception:
-            time.sleep(pause * (i + 1))
+logger = logging.getLogger(__name__)
 
-    # 2) fallback: cloudscraper (если стоит Cloudflare/WAF)
-    try:
-        import cloudscraper
-        scraper = cloudscraper.create_scraper()
-        r = scraper.get(url, timeout=30)
-        if r.status_code == 200:
+scraper = cloudscraper.create_scraper(
+    browser={
+        "browser": "chrome",
+        "platform": "windows",
+        "mobile": False
+    }
+)
+
+def _fetch_html(url: str,
+                retries: int = 5,
+                timeout: int = 30,
+                backoff_factor: int = 2):
+    """
+    Получаем HTML с ретраями и экспоненциальной задержкой.
+    retries – сколько всего попыток
+    timeout – базовый таймаут в секундах
+    backoff_factor – множитель задержки между попытками
+    """
+    last_exc = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            logger.info(f"Запрос к {url}, попытка {attempt}/{retries}, timeout={timeout}s")
+            r = scraper.get(url, timeout=timeout)
+            r.raise_for_status()
             return r.text
-        raise RuntimeError(f"cloudscraper status={r.status_code}")
-    except Exception as e:
-        raise RuntimeError(f"Не удалось получить HTML: {e}")
+
+        except (requests.exceptions.ReadTimeout,
+                requests.exceptions.ConnectionError) as e:
+            last_exc = e
+            if attempt == retries:
+                # Все попытки исчерпаны — выходим, но не падаем в этом месте
+                logger.error(
+                    f"Не удалось получить HTML с {url} после {retries} попыток: {e}"
+                )
+                break
+
+            # задержка с ростом
+            sleep_for = timeout * (backoff_factor ** (attempt - 1))
+            logger.warning(
+                f"Таймаут/ошибка соединения при запросе {url}: {e}. "
+                f"Ждём {sleep_for} сек и пробуем снова..."
+            )
+            time.sleep(sleep_for)
+
+        except Exception as e:
+            # любая другая ошибка — логируем и прекращаем попытки
+            last_exc = e
+            logger.exception(f"Неожиданная ошибка при запросе {url}: {e}")
+            break
+
+    # если сюда дошли — значит ничего не вышло
+    raise RuntimeError(f"Не удалось получить HTML: {last_exc}")
 
 def identification_park_date(link, soup):#t):
     '''Определяем название парка и дату пробежки'''
