@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import time
 import logging
 import cloudscraper
+import random
 from io import StringIO
 
 UA_HDRS = {
@@ -16,6 +17,8 @@ UA_HDRS = {
 
 logger = logging.getLogger(__name__)
 
+RETRY_HTTP_CODES = {500, 502, 503, 504}
+
 scraper = cloudscraper.create_scraper(
     browser={
         "browser": "chrome",
@@ -24,50 +27,96 @@ scraper = cloudscraper.create_scraper(
     }
 )
 
-def _fetch_html(url: str,
-                retries: int = 5,
-                timeout: int = 30,
-                backoff_factor: int = 2):
+def _sleep_with_jitter(base_sleep: float, jitter_factor: float = 0.1):
     """
-    Получаем HTML с ретраями и экспоненциальной задержкой.
-    retries – сколько всего попыток
-    timeout – базовый таймаут в секундах
-    backoff_factor – множитель задержки между попытками
+    Пауза с мягким джиттером.
+    base_sleep – базовая задержка в секундах
+    jitter_factor – доля разброса (0.1 = ±10%)
     """
+    low = 1.0 - jitter_factor
+    high = 1.0 + jitter_factor
+    k = random.uniform(low, high)
+    sleep_for = base_sleep * k
+    logger.info(
+        f"Задержка перед повтором: {sleep_for:.1f} сек "
+        f"(база {base_sleep:.1f}, джиттер {k:.2f})"
+    )
+    time.sleep(sleep_for)
+
+
+def _fetch_html(
+    url: str,
+    retries: int = 6,
+    timeout: int = 50,
+    backoff_factor: int = 2,
+):
     last_exc = None
 
     for attempt in range(1, retries + 1):
         try:
-            logger.info(f"Запрос к {url}, попытка {attempt}/{retries}, timeout={timeout}s")
+            logger.info(
+                f"Запрос к {url}, попытка {attempt}/{retries}, timeout={timeout}s"
+            )
             r = scraper.get(url, timeout=timeout)
             r.raise_for_status()
             return r.text
 
-        except (requests.exceptions.ReadTimeout,
-                requests.exceptions.ConnectionError) as e:
+        except requests.exceptions.ReadTimeout as e:
+            # сеть тупит → повторяем
             last_exc = e
             if attempt == retries:
-                # Все попытки исчерпаны — выходим, но не падаем в этом месте
-                logger.error(
-                    f"Не удалось получить HTML с {url} после {retries} попыток: {e}"
-                )
+                logger.error(f"Таймаут на {url} после {retries} попыток.")
                 break
 
-            # задержка с ростом
-            sleep_for = timeout * (backoff_factor ** (attempt - 1))
+            base_sleep = timeout * (backoff_factor ** (attempt - 1))
             logger.warning(
-                f"Таймаут/ошибка соединения при запросе {url}: {e}. "
-                f"Ждём {sleep_for} сек и пробуем снова..."
+                f"Таймаут при запросе {url}: {e}. "
+                f"Базовая задержка перед повтором {base_sleep} сек..."
             )
-            time.sleep(sleep_for)
+            _sleep_with_jitter(base_sleep)
+            # и идём на следующую попытку
+
+        except requests.exceptions.ConnectionError as e:
+            # обрыв соединения → повторяем
+            last_exc = e
+            if attempt == retries:
+                logger.error(f"Ошибка соединения на {url} после {retries} попыток.")
+                break
+
+            base_sleep = timeout * (backoff_factor ** (attempt - 1))
+            logger.warning(
+                f"Ошибка соединения {url}: {e}. "
+                f"Базовая задержка перед повтором {base_sleep} сек..."
+            )
+            _sleep_with_jitter(base_sleep)
+
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code
+            last_exc = e
+
+            if status in RETRY_HTTP_CODES:
+                # временные проблемы у сервера → пробуем ещё
+                if attempt == retries:
+                    logger.error(f"HTTP {status} на {url} после {retries} попыток.")
+                    break
+
+                base_sleep = timeout * (backoff_factor ** (attempt - 1))
+                logger.warning(
+                    f"HTTP {status} при запросе {url}. "
+                    f"Базовая задержка перед повтором {base_sleep} сек..."
+                )
+                _sleep_with_jitter(base_sleep)
+                continue
+
+            # остальные HTTP ошибки не лечатся ретраями
+            logger.exception(f"HTTP ошибка при запросе {url}: {e}")
+            break
 
         except Exception as e:
-            # любая другая ошибка — логируем и прекращаем попытки
             last_exc = e
             logger.exception(f"Неожиданная ошибка при запросе {url}: {e}")
             break
 
-    # если сюда дошли — значит ничего не вышло
     raise RuntimeError(f"Не удалось получить HTML: {last_exc}")
 
 def identification_park_date(link, soup):#t):
