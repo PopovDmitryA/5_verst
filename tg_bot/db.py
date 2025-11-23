@@ -218,3 +218,18 @@ def unlink_profile(tg_user_id: int) -> bool:
             {"tg": tg_user_id}
         )
     return res.rowcount > 0
+
+def mark_first_start(tg_user_id: int):
+    """
+    Фиксирует время первого /start для пользователя.
+    Если значение уже есть, ничего не меняет.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE tg_user_profile
+                SET first_start_ts = now()
+                WHERE tg_user_id = :u AND first_start_ts IS NULL
+            """),
+            {"u": tg_user_id}
+        )

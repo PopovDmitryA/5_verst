@@ -14,7 +14,7 @@ from db import (
     log_action, parse_user_id_from_text, user_exists, find_latest_name_for_user,
     can_change, bind_profile, list_clubs_distinct,
     set_user_club, delete_user_club, get_current_club, unlink_profile,
-    set_news_subscribed,   # <-- новое
+    set_news_subscribed, mark_first_start,
 )
 
 from aiogram.fsm.context import FSMContext
@@ -69,6 +69,7 @@ async def must_bound(message: Message) -> bool:
 @dp.message(CommandStart())
 async def on_start(message: Message):
     ensure_user_row(message.from_user.id, message.from_user.username, message.chat.id)
+    mark_first_start(message.from_user.id)
     row = get_profile(message.from_user.id)
     has_consent = bool(row and row.get('consent_accepted'))
     uid = row.get('user_id_5v') if row else None
