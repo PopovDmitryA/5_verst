@@ -13,11 +13,20 @@ def main_menu(consent_accepted: bool):
     # Когда согласие есть:
     rows.extend([
         # [KeyboardButton(text="👤 Профиль")]  # пока скрыто
-        [KeyboardButton(text="🪪 Профиль 5 вёрст")],
+        [KeyboardButton(text="👤 Мой профиль")],
         [KeyboardButton(text="📊 Дэшборды")],
         [KeyboardButton(text="⚙️ Настройки")],
     ])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+def profile_root_kb():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Учетная запись 5 вёрст", callback_data="profile:5v")],
+            [InlineKeyboardButton(text="Учетная запись parkrun", callback_data="profile:pr")],
+            [InlineKeyboardButton(text="Учетная запись С95", callback_data="profile:c95")],
+        ]
+    )
 
 
 def settings_kb(consent_accepted: bool, news_subscribed: bool):
@@ -51,7 +60,7 @@ def confirm_profile_kb(uid: str):
     )
 
 
-def clubs_kb(clubs: list[str], page: int = 0, per_page: int = 12):
+def clubs_kb(clubs: list[str], page: int = 0, per_page: int = 6):
     total = len(clubs)
     start = page * per_page
     end = min(start + per_page, total)
@@ -65,30 +74,39 @@ def clubs_kb(clubs: list[str], page: int = 0, per_page: int = 12):
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"clubs:page:{page+1}"))
     if nav:
         rows.append(nav)
+
+    # Всегда видимая кнопка "Назад" к профилю 5 вёрст
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="profile:5v")])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def delete_club_kb():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Удалить клуб", callback_data="club:delete")],
-            [InlineKeyboardButton(text="Отмена", callback_data="club:cancel")]
-        ]
-    )
 
 def clubs_actions_kb(has_club: bool):
-    buttons = [[InlineKeyboardButton(text="Привязать / изменить клуб", callback_data="clubs:action:set")]]
+    first_text = "Привязать клуб" if not has_club else "Поменять клуб"
+    buttons = [[InlineKeyboardButton(text=first_text, callback_data="clubs:action:set")]]
     if has_club:
         buttons.append([InlineKeyboardButton(text="Отвязать клуб", callback_data="clubs:action:unlink")])
     buttons.append([InlineKeyboardButton(text="Отмена", callback_data="clubs:action:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def confirm_parkrun_kb(user_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Да, привязать", callback_data=f"pr:confirm:{user_id}"),
+                InlineKeyboardButton(text="Отмена", callback_data="pr:cancel"),
+            ]
+        ]
+    )
+
 def profile5v_actions_kb(has_profile: bool, has_club: bool):
     rows = []
 
     # Профиль
+    profile_text = "Привязать профиль" if not has_profile else "Привязать другой профиль"
     rows.append([InlineKeyboardButton(
-        text="Привязать профиль" if not has_profile else "Привязать / изменить профиль",
+        text=profile_text,
         callback_data="p5v:action:bind"
     )])
 
@@ -97,15 +115,89 @@ def profile5v_actions_kb(has_profile: bool, has_club: bool):
 
     # Клубы – показываем ВСЕГДА
     if not has_profile:
-        # профиль не привязан → клубы недоступны
         rows.append([InlineKeyboardButton(text="Клубы (недоступно)", callback_data="p5v:club:no_profile")])
     else:
-        rows.append([InlineKeyboardButton(text="Привязать / изменить клуб", callback_data="clubs:action:set")])
+        club_text = "Привязать клуб" if not has_club else "Поменять клуб"
+        rows.append([InlineKeyboardButton(text=club_text, callback_data="clubs:action:set")])
         if has_club:
             rows.append([InlineKeyboardButton(text="Отвязать клуб", callback_data="clubs:action:unlink")])
 
-    rows.append([InlineKeyboardButton(text="Отмена", callback_data="p5v:action:cancel")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="profile:back")])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def profile_pr_actions_kb(has_parkrun: bool):
+    rows = []
+
+    profile_text = "Привязать профиль" if not has_parkrun else "Привязать другой профиль"
+    rows.append([
+        InlineKeyboardButton(
+            text=profile_text,
+            callback_data="pr:action:bind"
+        )
+    ])
+
+    if has_parkrun:
+        rows.append([
+            InlineKeyboardButton(
+                text="Отвязать профиль",
+                callback_data="pr:action:unbind"
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            text="Назад",
+            callback_data="profile:back"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def profile_c95_actions_kb(has_c95: bool):
+    rows = []
+
+    profile_text = "Привязать профиль" if not has_c95 else "Привязать другой профиль"
+    rows.append([
+        InlineKeyboardButton(
+            text=profile_text,
+            callback_data="c95:action:bind",
+        )
+    ])
+
+    if has_c95:
+        rows.append([
+            InlineKeyboardButton(
+                text="Отвязать профиль",
+                callback_data="c95:action:unbind",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            text="Назад",
+            callback_data="profile:back",
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def confirm_s95_kb(s95_id: str):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, привязать",
+                    callback_data=f"c95:confirm:{s95_id}",
+                ),
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data="c95:cancel",
+                ),
+            ]
+        ]
+    )
 
 def confirm_unlink_club_kb():
     return InlineKeyboardMarkup(
