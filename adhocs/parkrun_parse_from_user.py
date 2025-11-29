@@ -17,17 +17,6 @@ from playwright.sync_api import sync_playwright
 
 BASE_PARKRUN_URL = "https://www.parkrun.org.uk/parkrunner"
 
-#MAX_USERS_PER_RUN = 1000                 # сколько юзеров парсим за один запуск
-
-# случайная пауза между пользователями (в секундах)
-# MIN_SLEEP_BETWEEN_USERS = 5
-# MAX_SLEEP_BETWEEN_USERS = 20
-# USERS_PER_BROWSER_SESSION = 10
-
-
-# HEADLESS = False
-
-
 # ---------- Вспомогательные функции парсинга ----------
 
 def fetch_two_pages_with_browser(browser, url_general: str, url_all: str):
@@ -421,7 +410,7 @@ def main():
                     name_runner, age_category, df_vol_raw = parse_general_page(html_general)
                     df_results_raw = parse_all_results_page(html_all)
 
-                    if not name_runner:
+                    if name_runner is None:
                         print(
                             f"❗ Не удалось распарсить name_runner для user_id={user_id}. Помечаем как проблемного и пропускаем.")
 
