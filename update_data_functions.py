@@ -89,7 +89,9 @@ def check_new_protocols(credential):
         condition = [{'name_point': row['name_point']}, {'date_event': row['date_event']}]
         temp_now_protocol = db.get_inf_with_condition(engine, 'list_all_events', condition)
 
-        # Добавляем только если не пустой и не состоит полностью из NaN
+        if temp_now_protocol is None:
+            continue
+
         if not temp_now_protocol.empty and not temp_now_protocol.isna().all(axis=None):
             frames.append(temp_now_protocol)
 
@@ -129,33 +131,108 @@ def get_list_protocol(new_data):
 
     return data_protocols, data_protocol_vol
 
+# def add_new_protocols(credential, new_data, data_protocols, data_protocol_vol):
+#     '''Проверяем наличие протоколов, которые можно записать в БД, записываем + парсим детали протокола и записываем их в базу'''
+#     #engine = db.db_connect(credential)
+#     # new_data = check_new_protocols(credential)
+#     # if len(new_data) == 0:
+#     #     return
+#     # print(f'Есть {len(new_data)} протоколов для записи в БД')
+#     engine = db.db_connect(credential)
+#     db.append_df(engine, 'list_all_events', new_data)
+#     #data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
+#
+#     # for _, row in new_data.iterrows():
+#     #     link = row['link_event']
+#     #     final_df_run, final_df_vol = pp.main_parse(link)
+#     #     data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
+#     #     data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
+#     #     print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
+#
+#     #engine = db.db_connect(credential)
+#     db.append_df(engine, 'details_protocol', data_protocols)
+#     db.update_view(engine, 'new_turists')
+#
+#     #engine = db.db_connect(credential)
+#     db.append_df(engine, 'details_vol', data_protocol_vol)
+#     db.update_view(engine, 'new_turists_vol')
+#
+#     return print(f'В БД Записано {len(new_data)} протоколов, {len(data_protocols)} строчек бегунов, {len(data_protocol_vol)} строчек волонтеров')
+
 def add_new_protocols(credential, new_data, data_protocols, data_protocol_vol):
-    '''Проверяем наличие протоколов, которые можно записать в БД, записываем + парсим детали протокола и записываем их в базу'''
-    #engine = db.db_connect(credential)
-    # new_data = check_new_protocols(credential)
-    # if len(new_data) == 0:
-    #     return
-    # print(f'Есть {len(new_data)} протоколов для записи в БД')
-    engine = db.db_connect(credential)
-    db.append_df(engine, 'list_all_events', new_data)
-    #data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
+    """
+    Записываем новые протоколы в БД так, чтобы по КАЖДОМУ протоколу
+    атомарно обновлялись сразу три сущности:
+      - list_all_events
+      - details_protocol
+      - details_vol
 
-    # for _, row in new_data.iterrows():
-    #     link = row['link_event']
-    #     final_df_run, final_df_vol = pp.main_parse(link)
-    #     data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
-    #     data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
-    #     print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
+    new_data        — df для list_all_events (finish_df из check_new_protocols)
+    data_protocols  — все бегуны по этим протоколам
+    data_protocol_vol — все волонтёры по этим протоколам
+    """
 
-    #engine = db.db_connect(credential)
-    db.append_df(engine, 'details_protocol', data_protocols)
-    db.update_view(engine, 'new_turists')
+    if new_data is None or new_data.empty:
+        print("Новых протоколов для записи нет.")
+        return
 
-    #engine = db.db_connect(credential)
-    db.append_df(engine, 'details_vol', data_protocol_vol)
-    db.update_view(engine, 'new_turists_vol')
+    total_runners = 0
+    total_vols = 0
 
-    return print(f'В БД Записано {len(new_data)} протоколов, {len(data_protocols)} строчек бегунов, {len(data_protocol_vol)} строчек волонтеров')
+    # Пройдёмся по каждому протоколу отдельно
+    for _, row in new_data.iterrows():
+        name_point = row["name_point"]
+        date_event = pd.to_datetime(row["date_event"])
+
+        # 1) Выделяем детали по бегунам/волонтёрам для конкретного протокола
+        run_slice = data_protocols[
+            (data_protocols["name_point"] == name_point) &
+            (pd.to_datetime(data_protocols["date_event"]) == date_event)
+        ].copy()
+
+        vol_slice = data_protocol_vol[
+            (data_protocol_vol["name_point"] == name_point) &
+            (pd.to_datetime(data_protocol_vol["date_event"]) == date_event)
+        ].copy()
+
+        # Если по какой-то причине нет бегунов — лучше ничего не писать вообще
+        if run_slice.empty:
+            print(f"⚠️ Пропускаем протокол {name_point} / {date_event.date()} — нет данных по бегунам.")
+            continue
+
+        # 2) Формируем структуры под update_data_protocols как для НОВОГО протокола
+        for_removal_runner = pd.DataFrame(columns=["name_point", "date_event", "position"])
+        for_removal_vol = pd.DataFrame(columns=["name_point", "date_event", "user_id", "vol_role"])
+
+        to_add_runner = run_slice
+
+        if vol_slice.empty:
+            to_add_vol = pd.DataFrame(
+                columns=["name_point", "date_event", "name_runner", "link_runner", "user_id", "vol_role"]
+            )
+        else:
+            to_add_vol = vol_slice
+
+        # Строка для list_all_events — один протокол = одна строка
+        different_list_of_protocols = row.to_frame().T
+
+        # 3) Один вызов update_data_protocols → одна транзакция на три таблицы
+        update_data_protocols(
+            credential,
+            for_removal_runner, for_removal_vol,
+            to_add_runner, to_add_vol,
+            different_list_of_protocols
+        )
+
+        total_runners += len(to_add_runner)
+        total_vols += len(to_add_vol)
+
+        print(f"\tЗаписан новый протокол: {name_point} — {date_event.date()}")
+
+    print(
+        f"В БД записано {len(new_data)} протоколов, "
+        f"{total_runners} строчек бегунов, {total_vols} строчек волонтёров"
+    )
 
 def get_list_all_protocol(credential):
     '''Функция собирает данные со страниц всех протоколов каждого парка + получает из БД аналогичную таблицу, чтобы потом сравнить'''
