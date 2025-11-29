@@ -70,10 +70,23 @@ def get_table(engine, name_table, columns='*'):
 
 @retry_db()
 def execute_request(engine, sql_request):
-    '''Выполнить запрос целиком'''
-    with engine.connect() as conn:
-        conn.execute(sa.text(sql_request))
-        conn.commit()
+    """
+    Универсальная функция:
+    - для SELECT-запросов возвращает pandas.DataFrame
+    - для остальных запросов просто выполняет их и возвращает None
+    """
+    sql_str = str(sql_request).strip()
+    is_select = sql_str.lower().startswith("select")
+
+    if is_select:
+        # чтение данных
+        return pd.read_sql_query(sql_str, con=engine)
+    else:
+        # любые DDL/DML-операции
+        with engine.connect() as conn:
+            conn.execute(sa.text(sql_request))
+            conn.commit()
+        return None
 
 @retry_db()
 def append_df(engine, table_name, df):
