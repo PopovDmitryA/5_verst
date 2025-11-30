@@ -400,7 +400,7 @@ FROM list_all_events;
 
 def create_list_for_compare(credential):
     engine = db.db_connect(credential)
-    request = 'SELECT name_point FROM general_location where is_pause = false'
+    request = 'SELECT name_point FROM general_location where is_pause = false order by name_point'
     result = db.execute_request(engine, request)
     values_list = result.iloc[:, 0].tolist()
     return values_list
