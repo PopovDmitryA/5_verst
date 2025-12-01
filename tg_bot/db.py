@@ -91,6 +91,31 @@ def get_news_subscribed_tg_ids() -> list[int]:
         """)).fetchall()
     return [r[0] for r in rows]
 
+def set_january_notification(tg_user_id: int, subscribed: bool):
+    """
+    Включаем / выключаем подписку на уведомления по стартам 1 января.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE tg_user_profile
+            SET january_notification = :sub
+            WHERE tg_user_id = :u
+        """), {"sub": subscribed, "u": tg_user_id})
+
+
+def get_january_subscribed_tg_ids() -> list[int]:
+    """
+    ID тех, кто согласился на уведомления по стартам 1 января.
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT tg_user_id
+            FROM tg_user_profile
+            WHERE january_notification = true
+        """)).fetchall()
+    return [r[0] for r in rows]
+
+
 def next_time_after(last_dt) -> Optional[datetime]:
     if not last_dt:
         return None

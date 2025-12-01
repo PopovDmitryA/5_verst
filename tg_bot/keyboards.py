@@ -29,17 +29,32 @@ def profile_root_kb():
     )
 
 
-def settings_kb(consent_accepted: bool, news_subscribed: bool):
+def settings_kb(consent_accepted: bool, news_subscribed: bool, january_subscribed: bool):
     consent_icon = "✅" if consent_accepted else "❌"
     news_icon = "✅" if news_subscribed else "❌"
+    jan_icon = "✅" if january_subscribed else "❌"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"Согласие на обработку перс. данных: {consent_icon}", callback_data="settings:consent")],
-            [InlineKeyboardButton(text=f"Рассылка о новостях: {news_icon}", callback_data="settings:news")],
-            [InlineKeyboardButton(text="Вернуться в главное меню", callback_data="settings:close")],
+            [InlineKeyboardButton(
+                text=f"Согласие на обработку перс. данных: {consent_icon}",
+                callback_data="settings:consent"
+            )],
+            [InlineKeyboardButton(
+                text=f"Рассылка о новостях: {news_icon}",
+                callback_data="settings:news"
+            )],
+            [InlineKeyboardButton(
+                text=f"Уведомления о стартах 1 января: {jan_icon}",
+                callback_data="settings:january"
+            )],
+            [InlineKeyboardButton(
+                text="Вернуться в главное меню",
+                callback_data="settings:close"
+            )],
         ]
     )
+
 
 def consent_kb():
     return InlineKeyboardMarkup(

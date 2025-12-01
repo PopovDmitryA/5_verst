@@ -30,6 +30,7 @@ from db import (
     get_s95_runner, ensure_s95_runner_row, bind_s95_profile, unlink_s95_profile,
     get_s95_by_barcode, is_5v_profile_bound, is_parkrun_profile_bound, is_s95_profile_bound,
     get_last_5v_run, get_last_parkrun_run, get_last_s95_run, get_news_subscribed_tg_ids,
+    set_january_notification, get_january_subscribed_tg_ids,
 )
 
 # --- Telegram token ---
@@ -598,6 +599,7 @@ async def settings(message: Message):
     row = get_profile(message.from_user.id)
     consent = bool(row and row.get('consent_accepted'))
     news = bool(row and row.get('news_subscribed'))
+    january = bool(row and row.get('january_notification'))
 
     text = (
         "<b>Настройки</b>\n\n"
@@ -606,7 +608,7 @@ async def settings(message: Message):
     await message.answer(
         text,
         parse_mode="HTML",
-        reply_markup=settings_kb(consent, news),
+        reply_markup=settings_kb(consent, news, january),
         disable_web_page_preview=True
     )
 
@@ -635,6 +637,7 @@ async def consent_cb(cb: CallbackQuery):
     action = cb.data.split(":")[1]
     row = get_profile(cb.from_user.id) or {}
     news = bool(row.get("news_subscribed"))
+    january = bool(row.get("january_notification"))
 
 
     # 1. Принятие согласия
@@ -644,6 +647,7 @@ async def consent_cb(cb: CallbackQuery):
 
         row = get_profile(cb.from_user.id) or {}
         news = bool(row.get("news_subscribed"))
+        january = bool(row.get("january_notification"))
 
         text = "Спасибо! Согласие принято ✅"
 
@@ -656,7 +660,7 @@ async def consent_cb(cb: CallbackQuery):
 
         await cb.message.answer(
             text,
-            reply_markup=settings_kb(True, news),
+            reply_markup=settings_kb(True, news, january),
             disable_web_page_preview=True
         )
 
@@ -691,7 +695,11 @@ async def consent_cb(cb: CallbackQuery):
         # 1) Показываем настройки с обновлёнными флагами
         await cb.message.answer(
             "Согласие отозвано. Функционал бота будет ограничен до повторного принятия оферты.",
-            reply_markup=settings_kb(consent_accepted=False, news_subscribed=news),
+            reply_markup=settings_kb(
+                consent_accepted=False,
+                news_subscribed=news,
+                january_subscribed=january,
+            ),
             disable_web_page_preview=True,
         )
 
@@ -710,7 +718,11 @@ async def consent_cb(cb: CallbackQuery):
     elif action == "keep":
         await cb.message.answer(
             "Оставляем согласие без изменений.",
-            reply_markup=settings_kb(consent_accepted=True, news_subscribed=news),
+            reply_markup=settings_kb(
+                consent_accepted=True,
+                news_subscribed=news,
+                january_subscribed=january,
+            ),
             disable_web_page_preview=True,
         )
 
@@ -758,10 +770,11 @@ async def news_cb(cb: CallbackQuery):
 
         row = get_profile(cb.from_user.id) or {}
         consent = bool(row.get("consent_accepted"))
+        january = bool(row.get("january_notification"))
 
         await cb.message.answer(
             "Вы подписались на рассылку новостей проекта ✅",
-            reply_markup=settings_kb(consent, True),
+            reply_markup=settings_kb(consent, True, january),
             disable_web_page_preview=True,
         )
 
@@ -774,10 +787,12 @@ async def news_cb(cb: CallbackQuery):
 
         row = get_profile(cb.from_user.id) or {}
         consent = bool(row.get("consent_accepted"))
+        january = bool(row.get("january_notification"))
 
         await cb.message.answer(
             "Вы отписались от рассылки новостей.",
-            reply_markup=settings_kb(consent, False),
+            reply_markup=settings_kb(consent, False, january),
+
             disable_web_page_preview=True,
         )
 
@@ -790,12 +805,47 @@ async def news_cb(cb: CallbackQuery):
 
     await cb.answer()
 
+@dp.callback_query(F.data.startswith("january:"))
+async def january_cb(cb: CallbackQuery):
+    action = cb.data.split(":")[1]
+    row = get_profile(cb.from_user.id)
+
+    if action == "subscribe":
+        set_january_notification(cb.from_user.id, True)
+        await cb.message.answer(
+            "Вы подписались на уведомления о стартах 1 января.",
+            reply_markup=settings_kb(
+                consent_accepted=row.get("consent_accepted"),
+                news_subscribed=row.get("news_subscribed"),
+                january_subscribed=True
+            )
+        )
+    elif action == "unsubscribe":
+        set_january_notification(cb.from_user.id, False)
+        await cb.message.answer(
+            "Вы отписались от уведомлений 1 января.",
+            reply_markup=settings_kb(
+                consent_accepted=row.get("consent_accepted"),
+                news_subscribed=row.get("news_subscribed"),
+                january_subscribed=False
+            )
+        )
+    else:
+        await cb.message.answer(
+            "Действие отменено.",
+            reply_markup=mk_menu(cb.from_user.id),
+        )
+
+    await cb.answer()
+
 @dp.callback_query(F.data.startswith("settings:"))
 async def settings_cb(cb: CallbackQuery):
     action = cb.data.split(":")[1]
     row = get_profile(cb.from_user.id)
     consent = bool(row and row.get('consent_accepted'))
     news = bool(row and row.get('news_subscribed'))
+    january = bool(row and row.get('january_notification'))
+
 
     if action == "close":
         await cb.message.edit_reply_markup(reply_markup=None)
@@ -846,6 +896,35 @@ async def settings_cb(cb: CallbackQuery):
             await cb.message.answer("Вы уже подписаны на рассылку. Хотите отписаться?", reply_markup=kb, disable_web_page_preview=True)
         await cb.answer()
         return
+
+    if action == "january":
+        if not row.get("january_notification"):
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="Подписаться", callback_data="january:subscribe")],
+                    [InlineKeyboardButton(text="Отмена", callback_data="january:cancel")],
+                ]
+            )
+            await cb.message.answer(
+                "Хотите получать уведомления об изменении времени стартов 1 января?",
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+        else:
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="Отписаться", callback_data="january:unsubscribe")],
+                    [InlineKeyboardButton(text="Отмена", callback_data="january:cancel")],
+                ]
+            )
+            await cb.message.answer(
+                "Вы уже подписаны на уведомления. Хотите отписаться?",
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+        await cb.answer()
+        return
+
 
 @dp.callback_query(F.data == "p5v:club:no_profile")
 async def no_profile_club(cb: CallbackQuery):
