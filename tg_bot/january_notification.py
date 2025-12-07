@@ -6,6 +6,7 @@ import configparser
 import pandas as pd
 import requests
 import sqlalchemy as sa
+from typing import Optional
 from bs4 import BeautifulSoup
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
@@ -31,7 +32,7 @@ db_name = config['five_verst_stats']['dbname']
 
 tg_token = config['telegram']['token']
 
-# админ(ы) для отчёта — можно одно значение или через запятую
+# админ(ы) для отчёта — список chat_id через запятую
 admin_chat_ids_raw = config['telegram'].get('admins', '').strip()
 if admin_chat_ids_raw:
     admin_chat_ids = [x.strip() for x in admin_chat_ids_raw.split(',') if x.strip()]
@@ -89,6 +90,7 @@ def fetch_additional_events() -> pd.DataFrame:
     """
     Тянем с сайта данные дополнительных стартов и возвращаем DataFrame
     с колонками: name_point, latitude, longitude, time_start, city
+    (только для тех локаций, у которых заявлен старт на странице).
     """
     site = "https://5verst.ru/additional-events/"
 
@@ -166,7 +168,7 @@ def fetch_additional_events() -> pd.DataFrame:
 
     df = pd.DataFrame(rows, columns=["name_point", "latitude", "longitude", "time_start"])
 
-    print("Собрал данные с сайта, строк:", len(df))
+    print("Собрал данные с сайта, строк (только локации со стартами):", len(df))
 
     # Подтягиваем города
     loc_df = pd.read_sql("SELECT name_point, city FROM general_location", con=engine)
@@ -184,10 +186,29 @@ def fetch_additional_events() -> pd.DataFrame:
 # 0. Гарантируем, что в january2026 есть колонка city
 ensure_january2026_schema(engine)
 
-# 1. Тянем актуальные данные с сайта
-list_starts = fetch_additional_events()
-print("Первые строки новых данных:")
-print(list_starts.head())
+# 1. Тянем актуальные данные с сайта (ТОЛЬКО локации со стартами)
+site_starts = fetch_additional_events()
+print("Первые строки новых данных (с сайта):")
+print(site_starts.head())
+
+# 1.1. Формируем полный список локаций из general_location
+#      и проставляем time_start: либо из сайта, либо 'no_info', если старта нет.
+loc_full = pd.read_sql(
+    "SELECT name_point, latitude, longitude, city FROM general_location",
+    con=engine
+)
+
+# Берём только name_point + time_start из site_starts
+site_times = site_starts[["name_point", "time_start"]]
+
+# Левый join: все локации из general_location, где есть старт — подтягиваем время
+january_new = loc_full.merge(site_times, on="name_point", how="left")
+
+# Локации без старта на сайте помечаем 'no_info'
+january_new["time_start"] = january_new["time_start"].fillna("no_info")
+
+print("Первые строки полного списка (все локации):")
+print(january_new.head())
 
 # 2. Читаем текущие данные из january2026
 try:
@@ -206,36 +227,83 @@ for col in ["name_point", "latitude", "longitude", "time_start", "city"]:
 
 # Приводим типы
 old_df["name_point"] = old_df["name_point"].astype(str)
-list_starts["name_point"] = list_starts["name_point"].astype(str)
+january_new["name_point"] = january_new["name_point"].astype(str)
 
 # 3. Сравниваем старое и новое по name_point
 old_df = old_df.set_index("name_point")
-new_df = list_starts.set_index("name_point")
+new_df = january_new.set_index("name_point")
 
 all_points = sorted(set(old_df.index) | set(new_df.index))
 
 changes = []
 
+
+def normalize_time(value: Optional[str]) -> str:
+    """
+    Нормализуем время:
+    - None и 'no_info' считаем одним состоянием: 'no_info'
+    - всё остальное оставляем как есть (например, '09:00').
+    """
+    if value is None or value == "no_info":
+        return "no_info"
+    return value
+
+
+def display_old_new(old_norm: str, new_norm: str) -> tuple[str, str]:
+    """
+    Возвращаем человекочитаемые "Было"/"Стало" по нормализованным значениям.
+    Логика:
+      - 'no_info' → "старт не заявлен"
+      - если было время, а стало 'no_info' → "старт отменён"
+    """
+    # Было
+    if old_norm == "no_info":
+        old_display = "старт не заявлен"
+    else:
+        old_display = old_norm
+
+    # Стало
+    if new_norm == "no_info":
+        if old_norm == "no_info":
+            new_display = "старт не заявлен"
+        else:
+            new_display = "старт отменён"
+    else:
+        new_display = new_norm
+
+    return old_display, new_display
+
+
 for point in all_points:
     old_row = old_df.loc[point] if point in old_df.index else None
     new_row = new_df.loc[point] if point in new_df.index else None
 
-    old_time = old_row["time_start"] if old_row is not None else None
-    new_time = new_row["time_start"] if new_row is not None else None
+    old_time_raw = old_row["time_start"] if old_row is not None else None
+    new_time_raw = new_row["time_start"] if new_row is not None else None
 
-    if old_time != new_time:
-        old_city = old_row["city"] if old_row is not None else None
-        new_city = new_row["city"] if new_row is not None else None
-        city_display = new_city or old_city or "город не указан"
+    old_norm = normalize_time(old_time_raw)
+    new_norm = normalize_time(new_time_raw)
 
-        changes.append(
-            {
-                "name_point": point,
-                "city": city_display,
-                "old_time": old_time,
-                "new_time": new_time,
-            }
-        )
+    # Если нормализованные значения одинаковы — изменений нет
+    if old_norm == new_norm:
+        continue
+
+    old_city = old_row["city"] if (old_row is not None and "city" in old_row) else None
+    new_city = new_row["city"] if (new_row is not None and "city" in new_row) else None
+    city_display = new_city or old_city or "город не указан"
+
+    old_display, new_display = display_old_new(old_norm, new_norm)
+
+    changes.append(
+        {
+            "name_point": point,
+            "city": city_display,
+            "old_time_display": old_display,
+            "new_time_display": new_display,
+            "old_norm": old_norm,
+            "new_norm": new_norm,
+        }
+    )
 
 print(f"Найдено изменений: {len(changes)}")
 
@@ -250,14 +318,11 @@ if changes:
     ]
 
     for ch in changes:
-        old_display = ch["old_time"] if ch["old_time"] is not None else "старт не заявлен"
-        new_display = ch["new_time"] if ch["new_time"] is not None else "старт не заявлен"
-
         lines.append("")  # пустая строка между блоками
         # Локация жирным + эмодзи
         lines.append(f"📍 Локация: <b>{ch['name_point']}</b> ({ch['city']})")
-        lines.append(f"Было: {old_display}")
-        lines.append(f"Стало: {new_display}")
+        lines.append(f"Было: {ch['old_time_display']}")
+        lines.append(f"Стало: {ch['new_time_display']}")
 
     # ссылка на карту в конце сообщения
     lines.append("")
@@ -292,7 +357,7 @@ if changes and admin_chat_ids:
 # 5. Обновляем january2026 в БД
 with engine.begin() as conn:
     conn.execute(text("TRUNCATE january2026;"))
-    list_starts.to_sql("january2026", con=conn, if_exists="append", index=False)
+    january_new.to_sql("january2026", con=conn, if_exists="append", index=False)
 
 current_datetime = datetime.now()
 add_update_table(engine, "january2026", current_datetime)
