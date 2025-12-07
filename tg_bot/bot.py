@@ -31,6 +31,7 @@ from db import (
     get_s95_by_barcode, is_5v_profile_bound, is_parkrun_profile_bound, is_s95_profile_bound,
     get_last_5v_run, get_last_parkrun_run, get_last_s95_run, get_news_subscribed_tg_ids,
     set_january_notification, get_january_subscribed_tg_ids,
+    get_bot_stats, get_last_started_users,
 )
 
 # --- Telegram token ---
@@ -337,6 +338,80 @@ async def admin_message_cmd(message: Message, state: FSMContext):
         disable_web_page_preview=True,
     )
     await state.set_state(AdminBroadcast.waiting_message)
+
+@dp.message(Command("stats"))
+async def admin_stats_cmd(message: Message):
+    # Только админы
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Эта команда доступна только администратору бота.")
+        return
+
+    stats = get_bot_stats()
+
+    lines = [
+        "<b>Статистика по боту</b>",
+        "",
+        f"1. Всего чел запускали бота: <b>{stats.get('total_users', 0)}</b>",
+        f"2. Новых пользователей за последнюю неделю: <b>{stats.get('new_last_7d', 0)}</b>",
+        f"3. Новых пользователей за последний день: <b>{stats.get('new_last_1d', 0)}</b>",
+        "",
+        f"4. Приняли оферту: <b>{stats.get('consent_accepted', 0)}</b>",
+        f"5. Подписались на новости: <b>{stats.get('news_subscribed', 0)}</b>",
+        f"6. Подписались на уведомления 1 января: <b>{stats.get('january_notification', 0)}</b>",
+        "",
+        f"7. Привязали 5 вёрст ID: <b>{stats.get('bound_5v', 0)}</b>",
+        f"8. Привязали parkrun ID: <b>{stats.get('bound_parkrun', 0)}</b>",
+        f"9. Привязали С95 ID: <b>{stats.get('bound_s95', 0)}</b>",
+        "",
+        f"10. Привязали все 3 системы: <b>{stats.get('bound_all_three', 0)}</b>",
+        f"11. 5 вёрст + С95, без parkrun: <b>{stats.get('bound_5v_s95_only', 0)}</b>",
+        f"12. 5 вёрст + parkrun, без С95: <b>{stats.get('bound_5v_parkrun_only', 0)}</b>",
+        f"13. parkrun + С95, без 5 вёрст: <b>{stats.get('bound_parkrun_s95_only', 0)}</b>",
+    ]
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+    # Отдельным сообщением — последние 5 пользователей
+    last_users = get_last_started_users(5)
+    if not last_users:
+        return
+
+    lines2 = [
+        "<b>Последние 5 запусков бота</b>",
+        "",
+    ]
+
+    for row in last_users:
+        username = row.get("tg_username")
+        chat_id = row.get("tg_chat_id")
+        started = row.get("first_start_ts")
+
+        if username:
+            user_repr = f"@{username}"
+        elif chat_id:
+            user_repr = f"<a href=\"tg://user?id={chat_id}\">👤 {chat_id}</a>"
+        else:
+            user_repr = f"tg_user_id {row.get('tg_user_id')}"
+
+        # Красиво форматируем дату, если это datetime
+        try:
+            # если есть tz — приводим к TZ, если нет — просто форматируем
+            started_local = started.astimezone(TZ) if getattr(started, "tzinfo", None) else started
+            started_str = started_local.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            started_str = str(started)
+
+        lines2.append(f"{user_repr} — {started_str}")
+
+    await message.answer(
+        "\n".join(lines2),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 @dp.message(AdminBroadcast.waiting_message)
 async def admin_message_collect(message: Message, state: FSMContext):

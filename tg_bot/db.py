@@ -331,6 +331,78 @@ def mark_first_start(tg_user_id: int):
             {"u": tg_user_id}
         )
 
+def get_bot_stats() -> dict:
+    """
+    Сводная статистика по пользователям бота из tg_user_profile.
+    """
+    sql = """
+        SELECT
+            count(*) AS total_users,
+            count(*) FILTER (
+                WHERE first_start_ts >= now() - interval '7 days'
+            ) AS new_last_7d,
+            count(*) FILTER (
+                WHERE first_start_ts >= now() - interval '1 day'
+            ) AS new_last_1d,
+            count(*) FILTER (
+                WHERE consent_accepted = true
+            ) AS consent_accepted,
+            count(*) FILTER (
+                WHERE news_subscribed = true
+            ) AS news_subscribed,
+            count(*) FILTER (
+                WHERE january_notification = true
+            ) AS january_notification,
+            count(*) FILTER (
+                WHERE user_id_5v IS NOT NULL
+            ) AS bound_5v,
+            count(*) FILTER (
+                WHERE parkrun_user_id IS NOT NULL
+            ) AS bound_parkrun,
+            count(*) FILTER (
+                WHERE s95_user_id IS NOT NULL
+            ) AS bound_s95,
+            count(*) FILTER (
+                WHERE user_id_5v IS NOT NULL
+                  AND parkrun_user_id IS NOT NULL
+                  AND s95_user_id IS NOT NULL
+            ) AS bound_all_three,
+            count(*) FILTER (
+                WHERE user_id_5v IS NOT NULL
+                  AND s95_user_id IS NOT NULL
+                  AND parkrun_user_id IS NULL
+            ) AS bound_5v_s95_only,
+            count(*) FILTER (
+                WHERE user_id_5v IS NOT NULL
+                  AND parkrun_user_id IS NOT NULL
+                  AND s95_user_id IS NULL
+            ) AS bound_5v_parkrun_only,
+            count(*) FILTER (
+                WHERE user_id_5v IS NULL
+                  AND parkrun_user_id IS NOT NULL
+                  AND s95_user_id IS NOT NULL
+            ) AS bound_parkrun_s95_only
+        FROM tg_user_profile
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql)).mappings().first()
+    return dict(row) if row else {}
+
+def get_last_started_users(limit: int = 5) -> list[dict]:
+    """
+    Последние пользователи, впервые запустившие бота (по first_start_ts).
+    """
+    sql = """
+        SELECT tg_user_id, tg_username, tg_chat_id, first_start_ts
+        FROM tg_user_profile
+        WHERE first_start_ts IS NOT NULL
+        ORDER BY first_start_ts DESC
+        LIMIT :lim
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"lim": limit}).mappings().all()
+    return [dict(r) for r in rows]
+
 def get_parkrun_user(user_id: int):
     """
     Ищем пользователя в parkrun_users по user_id.
