@@ -119,21 +119,50 @@ def _fetch_html(
 
     raise RuntimeError(f"Не удалось получить HTML: {last_exc}")
 
-def identification_park_date(link, soup):#t):
-    '''Определяем название парка и дату пробежки'''
-    date_event = link.split('/')[5]
+def _is_valid_protocol_page(soup) -> bool:
+    """
+    Проверяем, что страница действительно похожа на страницу протокола:
+    - есть div.page-header.page-results-header
+    - внутри есть h1 с текстом 'Протокол 5 вёрст'
+    """
     header_div = soup.find('div', class_='page-header page-results-header')
-    name_point = None
-    #soup = BeautifulSoup(t.text, 'html.parser').find('div', class_='page-header page-results-header')
+    if not header_div:
+        return False
 
-    if header_div:
-        for link_run in header_div.find_all('h1'):
-            k = link_run.text
-        if k:
-            name_point = k.split('Протокол 5 вёрст')[1].split('(')[0].strip()
-    # for link_run in soup.find_all('h1'):
-    #     k = link_run.text
-    # name_point = k.split('Протокол 5 вёрст')[1].split('(')[0].strip()
+    h1 = header_div.find('h1')
+    if not h1:
+        return False
+
+    text = h1.get_text(' ', strip=True)
+    if 'Протокол 5 вёрст' not in text:
+        return False
+
+    return True
+
+def identification_park_date(link, soup):
+    """Определяем название парка и дату пробежки"""
+    # дата забега из ссылки вида .../results/29.11.2025/
+    date_event = link.split('/')[5]
+
+    header_div = soup.find('div', class_='page-header page-results-header')
+    if not header_div:
+        raise ValueError(f"Не найден блок заголовка протокола на странице {link}")
+
+    h1 = header_div.find('h1')
+    if not h1:
+        raise ValueError(f"Не найден заголовок h1 протокола на странице {link}")
+
+    text = h1.get_text(' ', strip=True)
+
+    if 'Протокол 5 вёрст' not in text:
+        raise ValueError(
+            f"Неожиданный текст заголовка протокола на {link}: {text!r}"
+        )
+
+    # text примерно: "Протокол 5 вёрст <парка> (<город>) за 29.11.2025"
+    middle = text.split('Протокол 5 вёрст', 1)[1]
+    name_point = middle.split('(')[0].strip()
+
     return date_event, name_point
 
 def slice_before_parenthesis(value):
