@@ -94,6 +94,12 @@ def url_5v_challenges(uid: Union[str, int]) -> str:
         f"?var-name={uid}"
     )
 
+def url_5v_map(uid: Union[str, int]) -> str:
+    return (
+        "https://run5k.run/d/"
+        "4469d2d0-c3ec-487b-85cf-190526e52993/karta-moih-startov"
+        f"?var-name={uid}"
+    )
 
 def url_5v_club_dashboard(club: str) -> str:
     encoded = urllib.parse.quote(club)
@@ -568,6 +574,7 @@ def build_profile_summary(row, show_hint: bool = False) -> str:
         runs_5v = get_5v_runs_count(uid_5v)
         runs_5v_text = pluralize_ru(runs_5v, ("пробежка", "пробежки", "пробежек"))
         club_5v = get_current_club(uid_5v)
+        map_url = url_5v_map(uid_5v)
 
         profile_url_5v = f"https://5verst.ru/userstats/{uid_5v}/"
         challenge_url_5v = (
@@ -580,6 +587,7 @@ def build_profile_summary(row, show_hint: bool = False) -> str:
             f"\nПрофиль: <a href=\"{profile_url_5v}\">{name_5v}</a> - {runs_5v_text}"
         )
         parts.append(f"\nЧелленджи: <a href=\"{challenge_url_5v}\">ссылка</a>")
+        parts.append(f"\nКарта моих стартов 5 вёрст: <a href=\"{map_url}\">ссылка</a>")
 
         if club_5v:
             encoded = urllib.parse.quote(club_5v)
@@ -594,6 +602,7 @@ def build_profile_summary(row, show_hint: bool = False) -> str:
     else:
         parts.append("\nПрофиль: не привязан")
         parts.append("\nЧелленджи: не привязан")
+        parts.append("\nКарта моих стартов: не привязан")
         parts.append("\nКлубы: не привязан")
 
     # --- parkrun ---
@@ -1472,12 +1481,14 @@ async def bind_confirm(cb: CallbackQuery):
         runs_5v_text = pluralize_ru(runs_5v, ("пробежка", "пробежки", "пробежек"))
 
         challenge_url = url_5v_challenges(uid)
+        map_url = url_5v_map(uid)
 
         text = (
             "<b>Профиль 5 вёрст</b>\n\n"
             "Профиль привязан ✅\n"
             f"<b>Профиль:</b> <a href=\"{profile_url}\">{name_txt}</a> - {runs_5v_text}\n"
             f"<b>Челленджи:</b> <a href=\"{challenge_url}\">перейти</a>\n"
+            f"<b>Карта моих стартов 5 вёрст:</b> <a href=\"{map_url}\">перейти</a>\n"
         )
 
         if has_club:
@@ -1611,9 +1622,11 @@ async def p5v_root_cb(cb: CallbackQuery):
         profile_url = url_5v_profile(uid)
         challenge_url = url_5v_challenges(uid)
         name_txt = find_latest_name_for_user(uid) or f"ID {uid}"
+        map_url = url_5v_map(uid)
 
         text += f"<b>Профиль:</b> <a href=\"{profile_url}\">{name_txt}</a>\n"
         text += f"<b>Челленджи:</b> <a href=\"{challenge_url}\">перейти</a>\n"
+        text += f"<b>Карта моих стартов 5 вёрст:</b> <a href=\"{map_url}\">перейти</a>\n"
 
         if has_club:
             club_url = url_5v_club_dashboard(club)

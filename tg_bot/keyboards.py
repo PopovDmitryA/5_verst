@@ -44,10 +44,10 @@ def settings_kb(consent_accepted: bool, news_subscribed: bool, january_subscribe
                 text=f"Рассылка о новостях: {news_icon}",
                 callback_data="settings:news"
             )],
-            [InlineKeyboardButton(
-                text=f"Уведомления о стартах 1 января: {jan_icon}",
-                callback_data="settings:january"
-            )],
+            # [InlineKeyboardButton(
+            #     text=f"Уведомления о стартах 1 января: {jan_icon}",
+            #     callback_data="settings:january"
+            # )],
             [InlineKeyboardButton(
                 text="Вернуться в главное меню",
                 callback_data="settings:close"
