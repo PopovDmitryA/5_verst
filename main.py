@@ -1,5 +1,5 @@
 from schedule_scripts import record_latest_protocol, update_all_protocols, \
-    update_recent_by_count, update_data_main, update_FIO, record_by_link
+    update_recent_by_count, update_data_main, update_FIO, record_by_link, add_location_by_link
 
 
 if __name__ == "__main__":
@@ -11,6 +11,7 @@ if __name__ == "__main__":
             "3 — Актуализировать ФИО участников, если были изменения\n"
             "4 — Сравнить последние X протоколов\n"
             "5 — Записать/актуализировать протокол по ссылке\n"
+            "6 — Добавить новую локацию по ссылке\n"
             "Ваш выбор: "
         )
 
@@ -90,6 +91,10 @@ if __name__ == "__main__":
 
         elif choice == '5':
             record_by_link.record_by_link()
+            break
+
+        elif choice == '6':
+            add_location_by_link.add_location_by_link()
             break
 
         else:

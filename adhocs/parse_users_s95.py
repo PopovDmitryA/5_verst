@@ -114,5 +114,5 @@ if __name__ == "__main__":
             continue
 
         # Рандомная пауза каждые 5–15 участников
-        if (i + 1) % random.randint(5, 15) == 0:
+        if (i + 1) % random.randint(1, 5) == 0:
             time.sleep(random.randint(10, 20))

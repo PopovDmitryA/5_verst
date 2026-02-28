@@ -257,15 +257,27 @@ def get_list_all_protocol(credential):
 
     count = len(result)
     # Собираем в единый df все данные со списком протоколов каждой локации
+    skipped = []
     for _, row in tqdm(result.iterrows(), total=count):
         link = link_handler.link_all_result_event(row['link_point'])
-        all_point_protocol = ptpp.transform_df_list_protocol(ptpp.list_protocols_in_park(link))
+
+        raw = ptpp.list_protocols_in_park(link)
+        if raw.empty:
+            # если это из-за 404 — мы уже напечатали предупреждение.
+            # здесь просто зафиксируем парк для финального отчёта
+            skipped.append(row["name_point"])
+            continue
+
+        all_point_protocol = ptpp.transform_df_list_protocol(raw)
         empty_df = pd.concat([empty_df, all_point_protocol], ignore_index=True)
 
         # Задержка от 10 до 20 секунд
         delay = random.uniform(10, 20)
         time.sleep(delay)
     #print(len(empty_df), len(table))
+    if skipped:
+        print(f"⚠️ Пропущены парки (не удалось получить список протоколов): {len(skipped)}")
+        print(", ".join(skipped))
     print('Спарсили списки всех протоколов для сравнения')
     return empty_df, table
 

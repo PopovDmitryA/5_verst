@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
-from io import StringIO
+from typing import Optional
 
 UA_HDRS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -12,8 +12,8 @@ UA_HDRS = {
     "Referer": "https://5verst.ru/",
 }
 
-def _fetch_html(url: str, tries: int = 3, pause: float = 2.0) -> str:
-    # 1) обычный requests с нормальными заголовками
+def _fetch_html(url: str, tries: int = 3, pause: float = 2.0) -> Optional[str]:
+    # 1) обычный requests
     for i in range(tries):
         try:
             r = requests.get(url, headers=UA_HDRS, timeout=20, allow_redirects=True)
@@ -21,21 +21,26 @@ def _fetch_html(url: str, tries: int = 3, pause: float = 2.0) -> str:
                 if not r.encoding or r.encoding.lower() == "iso-8859-1":
                     r.encoding = r.apparent_encoding
                 return r.text
-            # 403/429 — подождать и попробовать снова
+            # 404 — страницы нет, ретраи/обходы не помогут
+            if r.status_code == 404:
+                return None
+            # 403/429 — защита/лимиты: подождать и попробовать снова
             if r.status_code in (403, 429):
                 time.sleep(pause * (i + 1))
                 continue
+            # (по желанию) 5xx можно тоже ретраить, но пока оставим как "ошибка"
             r.raise_for_status()
         except Exception:
             time.sleep(pause * (i + 1))
-
-    # 2) fallback: cloudscraper (если стоит Cloudflare/WAF)
+    # 2) fallback: cloudscraper
     try:
         import cloudscraper
         scraper = cloudscraper.create_scraper()
         r = scraper.get(url, timeout=30)
         if r.status_code == 200:
             return r.text
+        if r.status_code == 404:
+            return None
         raise RuntimeError(f"cloudscraper status={r.status_code}")
     except Exception as e:
         raise RuntimeError(f"Не удалось получить HTML: {e}")
@@ -44,6 +49,23 @@ def list_protocols_in_park(link):
     """Парсим страницу с последними пробежками по парку"""
     # Получаем HTML с нужными заголовками (или через cloudscraper, если нужно)
     html = _fetch_html(link)
+
+    if html is None:
+        # 404 Not Found — пропускаем, чтобы не валить полный прогон
+        print(f"⚠️ 404: страница протоколов не найдена, пропускаем: {link}")
+        # Важно вернуть df с ожидаемыми колонками (см. transform_df_list_protocol)
+        return pd.DataFrame(columns=[
+            "##",
+            "Дата",
+            "Финишёров",
+            "Волонтёров",
+            "Среднее время",
+            'Лучшее "Ж"',
+            'Лучшее "М"',
+            "date_event",
+            "link_event",
+            "name_point",
+        ])
     soup = BeautifulSoup(html, "lxml")
 
     # Извлекаем название локации

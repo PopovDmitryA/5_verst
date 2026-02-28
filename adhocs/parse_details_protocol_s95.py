@@ -11,6 +11,23 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from pathlib import Path
 
+session = requests.Session()
+session.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/121.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Connection": "keep-alive",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+    "Referer": "https://s95.ru/",
+})
+
 # =========================
 # Функция парсинга протокола
 # =========================
@@ -18,7 +35,10 @@ def parse_protocol(page, name_point, date_event):
     parsed = urlparse(page)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    resp = requests.get(page, timeout=20)
+    resp = session.get(
+        page,
+        timeout=(10, 60)  # 5 сек connect, 60 сек read
+    )
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, 'html.parser')
 
@@ -152,6 +172,8 @@ def parse_protocol(page, name_point, date_event):
 
     return df_runner, df_vol
 
+def increase_backoff(current, factor=2, maximum=1800):
+    return min(current * factor, maximum)
 
 # =========================
 # Основной скрипт
@@ -171,7 +193,13 @@ if __name__ == "__main__":
     db_name = config['five_verst_stats']['dbname']
 
     credential = f'postgresql://{db_user}:{db_pass}@{db_host}/{db_name}'
-    engine = create_engine(credential)
+    engine = create_engine(
+        credential,
+        pool_pre_ping=True,  # проверяет соединение перед использованием
+        pool_recycle=900,  # раз в 15 минут пересоздает соединения
+        pool_size=5,
+        max_overflow=10,
+    )
 
     # Получаем список протоколов, которые ещё не загружены
     query = """
@@ -186,34 +214,154 @@ if __name__ == "__main__":
     events = pd.read_sql(query, engine)
 
     consecutive_429 = 0
+    consecutive_403 = 0
+    ban_backoff = 150  # стартовая пауза (1 минута)
+    MAX_BAN_BACKOFF = 1800  # максимум 30 минут
+    MAX_RETRIES = 2
+    BASE_SLEEP_SUCCESS = (45.0, 120.0)
+    SLEEP_READ_TIMEOUT = 150
+    SLEEP_CONNECTION_ERROR = 150
+    BAN_COOLDOWN_TRIGGER = 3  # после скольких бан-сигналов подряд включаем "режим бана"
+    ban_signals_streak = 0  # подряд бан-сигналов
     for i, row in tqdm(events.iterrows(), total=len(events), desc="Обработка протоколов"):
-        try:
-            df_runner, df_vol = parse_protocol(row['link_event'], row['name_point'], row['date_event'])
+        if ban_backoff >= MAX_BAN_BACKOFF:
+            print("Достигнут максимальный ban_backoff — останавливаю скрипт, чтобы не долбиться в бан.")
+            break
+        success = False
 
-            with engine.begin() as conn:
-                if not df_runner.empty:
-                    df_runner.to_sql('s95_details_protocol', conn, if_exists='append', index=False)
-                if not df_vol.empty:
-                    df_vol.to_sql('s95_details_vol', conn, if_exists='append', index=False)
+        for attempt in range(1, MAX_RETRIES + 1):
+            time.sleep(random.uniform(1.5, 3.5))
+            try:
+                df_runner, df_vol = parse_protocol(
+                    row['link_event'],
+                    row['name_point'],
+                    row['date_event']
+                )
 
-            consecutive_429 = 0  # сброс счётчика при успехе
+                # запись в БД
+                with engine.begin() as conn:
+                    if not df_runner.empty:
+                        df_runner.to_sql('s95_details_protocol', conn, if_exists='append', index=False)
+                    if not df_vol.empty:
+                        df_vol.to_sql('s95_details_vol', conn, if_exists='append', index=False)
 
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                consecutive_429 += 1
-                print(f"Ошибка 429 для {row['link_event']} ({consecutive_429} подряд)")
-                if consecutive_429 >= 10:
-                    print("Достигнут лимит 10 подряд ошибок 429. Останавливаем скрипт.")
+                # успех
+                time.sleep(random.uniform(*BASE_SLEEP_SUCCESS))
+                consecutive_429 = 0
+                consecutive_403 = 0
+                ban_backoff = max(120, int(ban_backoff * 0.7))
+                ban_signals_streak = 0
+                success = True
+                break
+
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response else None
+                if e.response is None:
+                    ban_signals_streak += 1
+                    print(
+                        f"HTTPError without response, backoff {ban_backoff}s: "
+                        f"{row['link_event']}"
+                    )
+
+                    time.sleep(ban_backoff)
+                    ban_backoff = increase_backoff(ban_backoff, maximum=MAX_BAN_BACKOFF)
+                    if ban_signals_streak >= BAN_COOLDOWN_TRIGGER:
+                        # даем сайту "остыть" и не перебираем дальше события
+                        extra = min(ban_backoff, MAX_BAN_BACKOFF)
+                        print(f"BAN mode: {ban_signals_streak} сигналов подряд, доп.пауза {extra}s")
+                        time.sleep(extra)
                     break
-                time.sleep(random.randint(10, 20))
+                elif status == 429:
+                    consecutive_429 += 1
+                    print(f"429 ({consecutive_429}) для {row['link_event']}")
+                    if consecutive_429 >= 10:
+                        print("10 подряд 429 — останавливаем скрипт")
+                        raise
+                    time.sleep(random.randint(20, 30))
+                    continue
+
+                elif status == 403:
+                    ban_signals_streak += 1
+                    consecutive_403 += 1
+                    print(
+                        f"403 Forbidden ({consecutive_403}), "
+                        f"backoff {ban_backoff}s: {row['link_event']}"
+                    )
+                    time.sleep(ban_backoff)
+                    ban_backoff = increase_backoff(ban_backoff, maximum=MAX_BAN_BACKOFF)
+
+                    if ban_signals_streak >= BAN_COOLDOWN_TRIGGER:
+                        extra = min(ban_backoff, MAX_BAN_BACKOFF)
+                        print(f"BAN mode: {ban_signals_streak} сигналов подряд, доп.пауза {extra}s")
+                        time.sleep(extra)
+
+                    break
+
+                else:
+                    print(f"HTTP ошибка {status} для {row['link_event']}")
+                    ban_signals_streak = 0
+                    consecutive_403 = 0
+                    time.sleep(random.randint(30, 60))
+                    break
+
+            except requests.exceptions.ReadTimeout:
+                print(f"ReadTimeout ({attempt}/{MAX_RETRIES}): {row['link_event']}")
+                ban_signals_streak += 1  # мягкий сигнал перегруза
+                time.sleep(SLEEP_READ_TIMEOUT)
+
+                # увеличиваем backoff мягко (не x2), например x1.3
+                ban_backoff = min(int(ban_backoff * 1.3), MAX_BAN_BACKOFF)
+
+                if ban_signals_streak >= BAN_COOLDOWN_TRIGGER:
+                    extra = min(ban_backoff, MAX_BAN_BACKOFF)
+                    print(f"BAN mode (timeout): {ban_signals_streak} подряд, доп.пауза {extra}s")
+                    time.sleep(extra)
+
                 continue
-            else:
-                print(f"Ошибка при обработке {row['link_event']}: {e}")
+
+            except requests.exceptions.ConnectionError:
+                print(
+                    f"ConnectionError, backoff {ban_backoff}s: "
+                    f"{row['link_event']}"
+                )
+                ban_signals_streak += 1
+                print(f"ConnectionError, backoff {ban_backoff}s: {row['link_event']}")
+                time.sleep(ban_backoff)
+                ban_backoff = increase_backoff(ban_backoff, maximum=MAX_BAN_BACKOFF)
+
+                if ban_signals_streak >= BAN_COOLDOWN_TRIGGER:
+                    extra = min(ban_backoff, MAX_BAN_BACKOFF)
+                    print(f"BAN mode: {ban_signals_streak} сигналов подряд, доп.пауза {extra}s")
+                    time.sleep(extra)
+
                 continue
-        except Exception as e:
-            print(f"Ошибка при обработке {row['link_event']}: {e}")
+
+            except (SQLAlchemyError,) as e:
+                print(f"DB ошибка для {row['link_event']}: {e}. Пересоздаю engine и жду 60s.")
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+                engine = create_engine(
+                    credential,
+                    pool_pre_ping=True,
+                    pool_recycle=900,
+                    pool_size=5,
+                    max_overflow=10,
+                )
+                time.sleep(60)
+                continue
+
+            except Exception as e:
+                print(f"Неожиданная ошибка {row['link_event']}: {e}")
+                break
+
+        if not success:
+            # минимальная пауза даже после "быстрого" отказа, чтобы не устроить штурм
+            time.sleep(random.uniform(40.0, 70.0))
+            print(f"Пропускаем протокол после {MAX_RETRIES} попыток: {row['link_event']}")
             continue
 
-        # Рандомная пауза каждые 5–10 протоколов
-        if (i + 1) % random.randint(5, 15) == 0:
-            time.sleep(random.randint(10, 20))
+        # дополнительная длинная пауза каждые 5–15 протоколов
+        if (i + 1) % random.randint(3, 15) == 0:
+            time.sleep(random.randint(40, 100))
