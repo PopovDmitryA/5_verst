@@ -6,6 +6,7 @@ import parse_table_protocols_in_park as ptpp
 from update_protocols import update_data_protocols
 
 import pandas as pd
+import sys
 import time
 import random
 from tqdm import tqdm
@@ -258,7 +259,9 @@ def get_list_all_protocol(credential):
     count = len(result)
     # Собираем в единый df все данные со списком протоколов каждой локации
     skipped = []
-    for _, row in tqdm(result.iterrows(), total=count):
+    show_progress = sys.stdout.isatty()
+
+    for _, row in tqdm(result.iterrows(), total=count, disable=not show_progress):
         link = link_handler.link_all_result_event(row['link_point'])
 
         raw = ptpp.list_protocols_in_park(link)
