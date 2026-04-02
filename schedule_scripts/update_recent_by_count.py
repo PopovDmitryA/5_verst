@@ -76,13 +76,20 @@ if __name__ == "__main__":
     try:
         count = int(sys.argv[1]) if len(sys.argv) > 1 else None
         parks = ast.literal_eval(sys.argv[2]) if len(sys.argv) > 2 else None
+        oldest_first_limit = int(sys.argv[3]) if len(sys.argv) > 3 else None
 
-        if count is not None and parks is not None:
+        if oldest_first_limit is not None:
+            find_dif_details_protocol(
+                count_last_protocol=count or 0,
+                name_point=parks,
+                oldest_first_limit=oldest_first_limit
+            )
+        elif count is not None and parks is not None:
             find_dif_details_protocol(count, parks)
         elif count is not None:
             find_dif_details_protocol(count)
         elif parks is not None:
-            find_dif_details_protocol(0, parks)  # предполагаем, что если count не указан, берём 0
+            find_dif_details_protocol(0, parks)
         else:
             find_dif_details_protocol()
 
@@ -90,7 +97,8 @@ if __name__ == "__main__":
         print(f"""
 Ошибка запуска: {e}
 Примеры:
-  python update_recent_by_count.py 5
-  python update_recent_by_count.py 5 "['Сосновка', 'Коломяги']"
-  python update_recent_by_count.py
+  python -m schedule_scripts.update_recent_by_count 5
+  python -m schedule_scripts.update_recent_by_count 5 "['Сосновка', 'Коломяги']"
+  python -m schedule_scripts.update_recent_by_count 0 "[]" 100
+  python -m schedule_scripts.update_recent_by_count
 """)
