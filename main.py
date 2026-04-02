@@ -33,6 +33,7 @@ if __name__ == "__main__":
                 "1 — Все парки\n"
                 "2 — Список парков (диапазон)\n"
                 "3 — Один парк\n"
+                "4 — Самые давно не проверявшиеся протоколы\n"
                 "Ваш выбор: "
             )
 
@@ -85,6 +86,16 @@ if __name__ == "__main__":
 
                 except (ValueError, IndexError):
                     print("Ошибка! Проверьте правильность номера парка и количества.")
+            elif sub_choice == '4':
+                try:
+                    limit = int(input("\nСколько протоколов проверить по самой старой дате last_check_at?: "))
+                    update_recent_by_count.find_dif_details_protocol(
+                        count_last_protocol=0,
+                        oldest_first_limit=limit
+                    )
+                    break
+                except ValueError:
+                    print("Ошибка! Пожалуйста, введите целое число.")
 
             else:
                 print("Неверный ввод. Попробуйте снова.")

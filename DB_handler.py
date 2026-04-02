@@ -150,3 +150,24 @@ def update_view(engine, view_name):
     with engine.connect() as conn:
         conn.execute(sa.text(f"REFRESH MATERIALIZED VIEW {view_name};"))
         conn.commit()
+
+@retry_db()
+def mark_protocol_checked(engine, name_point, date_event):
+    """
+    Обновляет дату/время последней проверки протокола.
+    Вызывать только после успешного завершения сравнения
+    или после успешной записи изменений в БД.
+    """
+    query = sa.text("""
+        UPDATE list_all_events
+        SET last_check_at = now()
+        WHERE name_point = :name_point
+          AND date_event = :date_event;
+    """)
+
+    with engine.connect() as conn:
+        conn.execute(query, {
+            "name_point": name_point,
+            "date_event": date_event
+        })
+        conn.commit()

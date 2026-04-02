@@ -1,43 +1,73 @@
-from update_data_functions import get_link_protocols_for_update, get_list_protocol, get_now_protocols, find_dif_protocol
-from update_protocols import update_data_protocols
+import time
+import random
+from update_data_functions import get_link_protocols_for_update, compare_and_update_single_protocol
+from update_protocols import refresh_protocol_materialized_views
 from .update_data_main import credential
 from datetime import datetime
 
-def find_dif_details_protocol(count_last_protocol=3, name_point=[]):
+def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_first_limit=None):
     """
-    Функция сверяет детали по последним x протоколам по каждому парку.
+    Итерационно сверяет детали по протоколам.
+    Каждый протокол:
+    - скачивается отдельно
+    - сразу сравнивается с БД
+    - сразу при необходимости обновляется
+    - после успешного завершения фиксируется last_check_at
 
-    :param count_last_protocol: количество последних стартов, которое мы проверяем у каждого парка
-    :param start_point: порядковый номер локации, с которого делаем выгрузку
-    :param finish_point: порядковый номер локации, по которую делаем выгрузку
-    :param name_point: наименование локации, если хотим выгрузить только какую-то конкретную
+    :param count_last_protocol: количество последних дат стартов для проверки
+    :param name_point: список парков
+    :param oldest_first_limit: если задан, выбрать N самых давно не проверявшихся протоколов
     """
-    if name_point:
-        list_protocols = get_link_protocols_for_update(credential, count_last_protocol, name_point)
-    else:
-        list_protocols = get_link_protocols_for_update(credential, count_last_protocol)
+    if name_point is None:
+        name_point = []
 
-    print(f'{datetime.now()}: Обновление {len(list_protocols)} протоколов')
+    list_protocols = get_link_protocols_for_update(
+        credential,
+        count_last_protocol=count_last_protocol,
+        name_point=name_point,
+        oldest_first_limit=oldest_first_limit
+    )
 
-    actual_protocols, actual_protocol_vol = get_list_protocol(list_protocols) # Парсим внутренности протоколов для сравнения
-    not_actual_protocols, not_actual_protocol_vol = get_now_protocols(credential, list_protocols) # Получаем из БД данные этих же протоколов для сравнения
+    print(f'{datetime.now()}: Выбрано {len(list_protocols)} протоколов для проверки')
 
-    print(f'''Выгрузили с сайта {len(actual_protocols)} строчек с бегунами и {len(actual_protocol_vol)} строк с волонтёрами
-Получили из БД по аналогичным протоколам {len(not_actual_protocols)} строк с бегунами и {len(not_actual_protocol_vol)} строк с волонтёрами
-Приступаем к сравнению и обновлению данных''')
+    updated = 0
+    no_changes = 0
+    errors = 0
 
-    for_removal_runner, to_add_runner = find_dif_protocol(actual_protocols, not_actual_protocols)
-    for_removal_vol, to_add_vol = find_dif_protocol(actual_protocol_vol, not_actual_protocol_vol)
+    total = len(list_protocols)
 
-    if any(not df.empty for df in [for_removal_runner, for_removal_vol, to_add_runner, to_add_vol]):
-        update_data_protocols(credential, for_removal_runner, for_removal_vol, to_add_runner, to_add_vol)
-        print(f'''
-Обновили данные в БД
-Из таблицы бегунов удалили {len(for_removal_runner)} старых записей, добавили {len(to_add_runner)} записей
-Из таблицы волонтеров удалили {len(for_removal_vol)} старых записей, добавили {len(to_add_vol)} записей
-        ''')
-    else:
-        print('Нет изменений')
+    for idx, (_, row) in enumerate(list_protocols.iterrows(), start=1):
+        try:
+            result = compare_and_update_single_protocol(
+                credential,
+                row,
+                update_summary_row=False
+            )
+
+            if result["status"] == "updated":
+                updated += 1
+            else:
+                no_changes += 1
+
+        except Exception as e:
+            errors += 1
+            print(f'Ошибка при обработке протокола {row["name_point"]} / {row["date_event"]}: {e}')
+
+        # Пауза между запросами к сайту, кроме последнего протокола
+        if idx < total:
+            delay = random.uniform(10, 20)
+            print(f'Пауза {delay:.1f} сек перед следующим протоколом...')
+            time.sleep(delay)
+
+    if updated > 0:
+        print('Обновляем materialized view после пачки изменений...')
+        refresh_protocol_materialized_views(credential)
+    print(f'''
+Проверка завершена:
+- обновлено протоколов: {updated}
+- без изменений: {no_changes}
+- с ошибками: {errors}
+''')
 
 if __name__ == "__main__":
     import sys

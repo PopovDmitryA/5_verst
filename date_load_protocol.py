@@ -9,6 +9,7 @@ import re
 from bs4 import BeautifulSoup
 import time
 from io import StringIO
+import DB_handler as db
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "5_verst.ini"
@@ -102,7 +103,7 @@ def update_date_load():
     last_event['date_type_event'] = pd.to_datetime(last_event['date_type_event'], format='%d.%m.%Y')
     last_event['name_point'] = last_event['Старт #'].str.split(' #').str[0]
 
-    engine = sa.create_engine(credential)
+    engine = db.db_connect(credential)
     result = pd.read_sql("SELECT * FROM general_date_load_protocol", con=engine)
 
     new_protocol = 0

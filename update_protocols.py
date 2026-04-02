@@ -4,10 +4,20 @@ from sqlalchemy.orm import sessionmaker
 import sqlalchemy as sa
 import DB_handler as db
 
-def update_data_protocols(credential, for_removal_runner, for_removal_vol, to_add_runner, to_add_vol, different_list_of_protocols=[]):
+def update_data_protocols(
+    credential,
+    for_removal_runner,
+    for_removal_vol,
+    to_add_runner,
+    to_add_vol,
+    different_list_of_protocols=None,
+    checked_protocol=None
+):
     '''Кастомная функция удаления и записи новых данных в разные таблицы
     Логика такая, что делаем все внутри одной функции, чтобы если на каком-то этапе произойдет ошибка, то коммит не произойдет и частичные изменения не сохранятся'''
-    engine = sa.create_engine(credential)
+    if different_list_of_protocols is None:
+        different_list_of_protocols = []
+    engine = db.db_connect(credential)
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -159,7 +169,31 @@ def update_data_protocols(credential, for_removal_runner, for_removal_vol, to_ad
     # Массивная запись в базу данных
     session.bulk_save_objects(objects_to_insert_vol)
 
-    session.execute(sa.text("REFRESH MATERIALIZED VIEW new_turists"))
-    session.execute(sa.text("REFRESH MATERIALIZED VIEW new_turists_vol"))
+    if checked_protocol is not None:
+        session.execute(
+            sa.text("""
+                UPDATE list_all_events
+                SET last_check_at = now()
+                WHERE name_point = :name_point
+                  AND date_event = :date_event
+            """),
+            {
+                "name_point": checked_protocol["name_point"],
+                "date_event": checked_protocol["date_event"]
+            }
+        )
+
     session.commit()
     session.close()
+
+def refresh_protocol_materialized_views(credential):
+    """
+    Обновляет materialized view после завершения пачки изменений.
+    Вызывать один раз после серии обновлений протоколов.
+    """
+    engine = db.db_connect(credential)
+
+    with engine.connect() as conn:
+        conn.execute(sa.text("REFRESH MATERIALIZED VIEW new_turists"))
+        conn.execute(sa.text("REFRESH MATERIALIZED VIEW new_turists_vol"))
+        conn.commit()

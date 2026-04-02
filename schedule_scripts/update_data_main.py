@@ -1,8 +1,9 @@
 import configparser
-from update_data_functions import get_list_protocol, get_now_protocols, find_dif_protocol, create_list_for_compare
-from update_protocols import update_data_protocols
+from update_data_functions import create_list_for_compare
+from update_protocols import refresh_protocol_materialized_views
 from pathlib import Path
-import pandas as pd
+import time
+import random
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
@@ -19,25 +20,56 @@ db_name = config['five_verst_stats']['dbname']
 credential = f'postgresql://{db_user}:{db_pass}@{db_host}/{db_name}'
 
 def func_update_protocols(different_list_of_protocols):
+    """
+    Итерационная обработка протоколов, найденных по отличиям в саммари.
+    Каждый протокол:
+    - парсится отдельно
+    - сравнивается отдельно
+    - обновляется отдельно
+    - после успеха получает новый last_check_at
+    """
+    from update_data_functions import compare_and_update_single_protocol
+
     print(f'Нашли {len(different_list_of_protocols)} протоколов с отличиями')
-    actual_protocols, actual_protocol_vol = get_list_protocol(different_list_of_protocols)
-    not_actual_protocols, not_actual_protocol_vol = get_now_protocols(credential, different_list_of_protocols)
 
-    for_removal_runner, to_add_runner = find_dif_protocol(actual_protocols, not_actual_protocols)
+    updated = 0
+    no_changes = 0
+    errors = 0
 
-    if not_actual_protocol_vol.empty:
-        to_add_vol = actual_protocol_vol
-        for_removal_vol = pd.DataFrame()
-    else:
-        for_removal_vol, to_add_vol = find_dif_protocol(actual_protocol_vol, not_actual_protocol_vol)
+    total = len(different_list_of_protocols)
 
-    update_data_protocols(credential, for_removal_runner, for_removal_vol, to_add_runner, to_add_vol, different_list_of_protocols)
+    for idx, (_, row) in enumerate(different_list_of_protocols.iterrows(), start=1):
+        try:
+            result = compare_and_update_single_protocol(
+                credential,
+                row,
+                update_summary_row=True
+            )
 
+            if result["status"] == "updated":
+                updated += 1
+            else:
+                no_changes += 1
+
+        except Exception as e:
+            errors += 1
+            print(f'Ошибка при обработке {row["name_point"]} / {row["date_event"]}: {e}')
+
+        # Пауза между запросами к сайту, кроме последнего протокола
+        if idx < total:
+            delay = random.uniform(10, 20)
+            print(f'Пауза {delay:.1f} сек перед следующим протоколом...')
+            time.sleep(delay)
+
+    if updated > 0:
+        print('Обновляем materialized view после пачки изменений...')
+        refresh_protocol_materialized_views(credential)
     print(f'''
-    Обновили данные по {len(different_list_of_protocols)} протоколам
-    Удалено {len(for_removal_runner)} бегунов, добавлено {len(to_add_runner)}
-    Удалено {len(for_removal_vol)} волонтеров, добавлено {len(to_add_vol)}
-    ''')
+Обработка завершена:
+Обновлено: {updated}
+Без изменений: {no_changes}
+Ошибок: {errors}
+''')
 
 def list_point_update():
     return create_list_for_compare(credential)

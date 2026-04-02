@@ -361,48 +361,196 @@ def find_dif_protocol(actual_df, not_actual_df):
 
     return for_delete, to_add
 
+def compare_and_update_single_protocol(credential, protocol_row, update_summary_row=False):
+    """
+    Сравнивает ОДИН протокол:
+    - парсит сайт
+    - получает текущие данные из БД
+    - ищет отличия
+    - если есть изменения -> записывает их
+    - если изменений нет -> просто фиксирует last_check_at
 
-def get_link_protocols_for_update(credential, count_last_protocol, name_point=[]):
-    '''Функция возвращает список протоколов для сверки'''
+    :param credential: строка подключения
+    :param protocol_row: pandas.Series или dict со значениями name_point, date_event, link_event
+    :param update_summary_row: если True, то строка list_all_events тоже будет перезаписана
+                               при наличии отличий по саммари
+    :return: dict с результатом обработки
+    """
+    engine = db.db_connect(credential)
+
+    if hasattr(protocol_row, "to_dict"):
+        protocol_row = protocol_row.to_dict()
+
+    name_point = protocol_row["name_point"]
+    date_event = pd.to_datetime(protocol_row["date_event"])
+    link_event = protocol_row["link_event"]
+
+    print(f'Проверяем протокол: {name_point} / {date_event.date()}')
+
+    # 1. Парсим актуальный протокол с сайта
+    actual_run, actual_vol = pp.main_parse(link_event)
+
+    # 2. Получаем текущие данные этого же протокола из БД
+    this_proto = pd.DataFrame([{
+        "name_point": name_point,
+        "date_event": date_event
+    }])
+
+    now_run, now_vol = get_now_protocols(credential, this_proto)
+
+    # 3. Сравнение бегунов
+    for_removal_runner, to_add_runner = find_dif_protocol(actual_run, now_run)
+
+    # 4. Сравнение волонтёров
+    if actual_vol is None:
+        if now_vol.empty:
+            actual_vol_for_compare = pd.DataFrame(
+                columns=["name_point", "date_event", "name_runner", "link_runner", "user_id", "vol_role"]
+            )
+        else:
+            actual_vol_for_compare = pd.DataFrame(columns=now_vol.columns)
+    else:
+        actual_vol_for_compare = actual_vol
+
+    if now_vol.empty and actual_vol_for_compare.empty:
+        for_removal_vol = pd.DataFrame(columns=["name_point", "date_event", "user_id", "vol_role"])
+        to_add_vol = pd.DataFrame(columns=["name_point", "date_event", "name_runner", "link_runner", "user_id", "vol_role"])
+    else:
+        for_removal_vol, to_add_vol = find_dif_protocol(actual_vol_for_compare, now_vol)
+
+    # 5. Нужно ли обновлять строку list_all_events
+    different_list_of_protocols = pd.DataFrame()
+
+    if update_summary_row:
+        current_summary = db.get_inf_with_condition(
+            engine,
+            "list_all_events",
+            [{"name_point": name_point}, {"date_event": date_event}]
+        )
+
+        if current_summary is None or current_summary.empty:
+            different_list_of_protocols = pd.DataFrame([protocol_row])
+        else:
+            current_summary = current_summary.drop(columns=["updated_at", "last_check_at"], errors="ignore")
+
+            site_summary = pd.DataFrame([protocol_row]).copy()
+            site_summary = site_summary[current_summary.columns.intersection(site_summary.columns)]
+
+            current_summary = current_summary[site_summary.columns]
+
+            current_summary = current_summary.reset_index(drop=True)
+            site_summary = site_summary.reset_index(drop=True)
+
+            if not site_summary.equals(current_summary):
+                different_list_of_protocols = pd.DataFrame([protocol_row])
+
+    # 6. Если есть изменения — записываем
+    has_changes = any([
+        not for_removal_runner.empty,
+        not to_add_runner.empty,
+        not for_removal_vol.empty,
+        not to_add_vol.empty,
+        not different_list_of_protocols.empty
+    ])
+
+    if has_changes:
+        update_data_protocols(
+            credential,
+            for_removal_runner,
+            for_removal_vol,
+            to_add_runner,
+            to_add_vol,
+            different_list_of_protocols,
+            checked_protocol={
+                "name_point": name_point,
+                "date_event": date_event
+            }
+        )
+
+        print(
+            f'Обновили протокол {name_point} / {date_event.date()}: '
+            f'удалили бегунов {len(for_removal_runner)}, добавили бегунов {len(to_add_runner)}, '
+            f'удалили волонтёров {len(for_removal_vol)}, добавили волонтёров {len(to_add_vol)}'
+        )
+
+        return {
+            "name_point": name_point,
+            "date_event": date_event,
+            "status": "updated"
+        }
+
+    # 7. Если изменений нет — просто фиксируем успешную проверку
+    db.mark_protocol_checked(engine, name_point, date_event)
+
+    print(f'Нет изменений: {name_point} / {date_event.date()}')
+
+    return {
+        "name_point": name_point,
+        "date_event": date_event,
+        "status": "no_changes"
+    }
+
+def get_link_protocols_for_update(
+    credential,
+    count_last_protocol=0,
+    name_point=None,
+    oldest_first_limit=None
+):
+    """
+    Возвращает список протоколов для сверки.
+
+    Режимы:
+    1) oldest_first_limit=N -> взять N самых давно не проверявшихся протоколов
+    2) count_last_protocol>0 -> взять протоколы по последним N уникальным датам
+    3) иначе -> все протоколы
+
+    :param credential:
+    :param count_last_protocol:
+    :param name_point: список парков или None
+    :param oldest_first_limit: если задан, выбираем N самых старых по last_check_at
+    """
+    if name_point is None:
+        name_point = []
+
+    where_parts = []
 
     if len(name_point) != 0:
         result_list = [{'name_point': point} for point in name_point]
         condition = db.create_condition(result_list, 'OR')
+        where_parts.append(f'({condition})')
 
-        if count_last_protocol > 0:
-            date_filter = f'''
-                date_event IN (
-                    SELECT DISTINCT date_event
-                    FROM list_all_events
-                    ORDER BY date_event DESC
-                    LIMIT {count_last_protocol}
-                )
-            '''
-        else:
-            date_filter = 'TRUE'  # Без ограничения по датам
+    if oldest_first_limit is not None:
+        where_clause = ''
+        if where_parts:
+            where_clause = 'WHERE ' + ' AND '.join(where_parts)
 
         request = f'''
 SELECT *
 FROM list_all_events
-WHERE {date_filter}
-  AND ({condition});
-        '''
+{where_clause}
+ORDER BY last_check_at ASC NULLS FIRST, date_event ASC, name_point ASC
+LIMIT {oldest_first_limit};
+'''
     else:
         if count_last_protocol > 0:
-            request = f'''
-SELECT *
-FROM list_all_events
-WHERE date_event IN (
+            date_filter = f'''
+date_event IN (
     SELECT DISTINCT date_event
     FROM list_all_events
     ORDER BY date_event DESC
     LIMIT {count_last_protocol}
-);
+)
 '''
-        else:
-            request = '''
+            where_parts.append(date_filter)
+
+        where_clause = ''
+        if where_parts:
+            where_clause = 'WHERE ' + ' AND '.join(where_parts)
+
+        request = f'''
 SELECT *
-FROM list_all_events;
+FROM list_all_events
+{where_clause};
 '''
 
     engine = db.db_connect(credential)
