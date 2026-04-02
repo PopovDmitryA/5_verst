@@ -1,5 +1,6 @@
 from sqlalchemy.orm import sessionmaker
 import sqlalchemy as sa
+from datetime import datetime
 from .update_data_main import credential
 
 def update_FIO():
@@ -99,3 +100,7 @@ AND details_vol.name_runner != ln.actual_name_runner;
     session.commit()
     print(f'Обновлено {result_run.rowcount} строк в таблице с бегунами\nИ {result_vol.rowcount} строк в таблице с волонтёрами')
     session.close()
+
+if __name__ == "__main__":
+    print(f"{datetime.now()}: Запуск update_FIO")
+    update_FIO()
