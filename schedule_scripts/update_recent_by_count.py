@@ -3,6 +3,7 @@ import random
 from update_data_functions import get_link_protocols_for_update, compare_and_update_single_protocol
 from update_protocols import refresh_protocol_materialized_views
 from .update_data_main import credential
+from telegram_notifier import send_telegram_notification
 from datetime import datetime
 
 def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_first_limit=None):
@@ -68,6 +69,28 @@ def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_fir
 - без изменений: {no_changes}
 - с ошибками: {errors}
 ''')
+    if oldest_first_limit is not None:
+        mode_text = f"oldest_first_limit={oldest_first_limit}"
+    else:
+        mode_text = f"count_last_protocol={count_last_protocol}"
+
+    park_text = "все парки"
+    if name_point:
+        park_text = f"парки: {', '.join(name_point[:10])}"
+        if len(name_point) > 10:
+            park_text += f" ... (+{len(name_point) - 10})"
+
+    message = (
+        f"🔄 update_recent_by_count\n"
+        f"Режим: {mode_text}\n"
+        f"Область: {park_text}\n"
+        f"Проверено протоколов: {len(list_protocols)}\n"
+        f"Обновлено: {updated}\n"
+        f"Без изменений: {no_changes}\n"
+        f"Ошибок: {errors}"
+    )
+
+    send_telegram_notification(message)
 
 if __name__ == "__main__":
     import sys

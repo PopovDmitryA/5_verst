@@ -70,6 +70,12 @@ def func_update_protocols(different_list_of_protocols):
 Без изменений: {no_changes}
 Ошибок: {errors}
 ''')
+    return {
+        "updated": updated,
+        "no_changes": no_changes,
+        "errors": errors,
+        "total": len(different_list_of_protocols),
+    }
 
 def list_point_update():
     return create_list_for_compare(credential)

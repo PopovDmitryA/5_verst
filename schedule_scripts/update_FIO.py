@@ -1,5 +1,7 @@
 from sqlalchemy.orm import sessionmaker
 import sqlalchemy as sa
+import DB_handler as db
+from telegram_notifier import send_telegram_notification
 from datetime import datetime
 from .update_data_main import credential
 
@@ -98,7 +100,23 @@ AND details_vol.name_runner != ln.actual_name_runner;
 """)
     result_vol = session.execute(request_vol)
     session.commit()
-    print(f'Обновлено {result_run.rowcount} строк в таблице с бегунами\nИ {result_vol.rowcount} строк в таблице с волонтёрами')
+
+    count_run = result_run.rowcount if result_run.rowcount is not None else 0
+    count_vol = result_vol.rowcount if result_vol.rowcount is not None else 0
+
+    print(
+        f'Обновлено {count_run} строк в таблице с бегунами\n'
+        f'И {count_vol} строк в таблице с волонтёрами'
+    )
+
+    message = (
+        f"🔄 update_FIO\n"
+        f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Обновлено строк в details_protocol: {count_run}\n"
+        f"Обновлено строк в details_vol: {count_vol}"
+    )
+    send_telegram_notification(message)
+
     session.close()
 
 if __name__ == "__main__":
