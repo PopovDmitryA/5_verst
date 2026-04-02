@@ -7,6 +7,7 @@ from update_protocols import update_data_protocols
 
 import pandas as pd
 import sys
+import os
 import time
 import random
 from tqdm import tqdm
@@ -259,7 +260,7 @@ def get_list_all_protocol(credential):
     count = len(result)
     # Собираем в единый df все данные со списком протоколов каждой локации
     skipped = []
-    show_progress = sys.stdout.isatty()
+    show_progress = sys.stdout.isatty() or os.environ.get("PYCHARM_HOSTED") == "1"
 
     for _, row in tqdm(result.iterrows(), total=count, disable=not show_progress):
         link = link_handler.link_all_result_event(row['link_point'])
