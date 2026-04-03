@@ -80,3 +80,20 @@ def send_telegram_notification(message: str) -> bool:
 def escape_markdown(text: str) -> str:
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return "".join(f"\\{c}" if c in escape_chars else c for c in text)
+
+def escape_markdown_url(url: str) -> str:
+    """
+    Экранирование URL для MarkdownV2 в Telegram.
+    Достаточно для ссылок внутри конструкции [текст](url).
+    """
+    return (
+        str(url)
+        .replace("\\", "\\\\")
+        .replace(")", "\\)")
+    )
+
+def make_markdown_link(title: str, url: str) -> str:
+    """
+    Формирует кликабельную ссылку для Telegram MarkdownV2.
+    """
+    return f"[{escape_markdown(title)}]({escape_markdown_url(url)})"

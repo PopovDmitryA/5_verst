@@ -1,6 +1,6 @@
 import update_data_functions as udf
 from .update_data_main import func_update_protocols, credential
-from telegram_notifier import send_telegram_notification, escape_markdown
+from telegram_notifier import send_telegram_notification, escape_markdown, make_markdown_link
 from datetime import datetime
 
 
@@ -54,7 +54,13 @@ def record_latest_protocol():
         udf.add_new_protocols(credential, new_data, data_protocols, data_protocol_vol)
 
         new_protocols = [
-            f"{row['name_point']} — {row['date_event'].strftime('%Y-%m-%d')}"
+            {
+                "name_point": row["name_point"],
+                "date_event": row["date_event"].strftime("%Y-%m-%d"),
+                "count_runners": int(row["count_runners"]) if row["count_runners"] is not None else 0,
+                "count_vol": int(row["count_vol"]) if row["count_vol"] is not None else 0,
+                "link_event": row["link_event"],
+            }
             for _, row in new_data.iterrows()
         ]
 
@@ -75,7 +81,11 @@ def record_latest_protocol():
     if new_protocols:
         new_list_text = "\n\n*Новые протоколы:*\n"
         for item in new_protocols:
-            new_list_text += f"• {escape_markdown(item)}\n"
+            title = (
+                f"{item['name_point']} — {item['date_event']} "
+                f"(участников: {item['count_runners']}, волонтёров: {item['count_vol']})"
+            )
+            new_list_text += f"• {make_markdown_link(title, item['link_event'])}\n"
 
     updated_list_text = ""
     if updated_stats["updated_protocols"]:
