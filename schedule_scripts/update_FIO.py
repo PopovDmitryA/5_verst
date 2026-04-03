@@ -1,12 +1,12 @@
 from sqlalchemy.orm import sessionmaker
 import sqlalchemy as sa
 import DB_handler as db
-from telegram_notifier import send_telegram_notification
+from telegram_notifier import send_telegram_notification, escape_markdown
 from datetime import datetime
 from .update_data_main import credential
 
 def update_FIO():
-    engine = sa.create_engine(credential)
+    engine = db.db_connect(credential)
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -109,12 +109,25 @@ AND details_vol.name_runner != ln.actual_name_runner;
         f'И {count_vol} строк в таблице с волонтёрами'
     )
 
-    message = (
-        f"🔄 update_FIO\n"
-        f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"Обновлено строк в details_protocol: {count_run}\n"
-        f"Обновлено строк в details_vol: {count_vol}"
-    )
+    started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    if count_run == 0 and count_vol == 0:
+        status_emoji = "⚪"
+        message = (
+            f"*__{status_emoji} update\\_FIO__*\n\n"
+            f"*Время запуска:* {escape_markdown(started_at)}\n"
+            f"*Обновлено строк в details\\_protocol:* {count_run}\n"
+            f"*Обновлено строк в details\\_vol:* {count_vol}\n\n"
+            f"Изменений в ФИО не найдено\\."
+        )
+    else:
+        status_emoji = "🟢"
+        message = (
+            f"*__{status_emoji} update\\_FIO__*\n\n"
+            f"*Время запуска:* {escape_markdown(started_at)}\n"
+            f"*Обновлено строк в details\\_protocol:* {count_run}\n"
+            f"*Обновлено строк в details\\_vol:* {count_vol}"
+        )
     send_telegram_notification(message)
 
     session.close()

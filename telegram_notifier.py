@@ -36,7 +36,11 @@ def load_telegram_config():
 
 
 def clean_text_for_telegram(text: str) -> str:
-    text = re.sub(r"[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]", "", text)
+    """
+    Убираем только реальные управляющие символы,
+    не трогая emoji и обычный unicode.
+    """
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
     if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
         text = text[:MAX_TELEGRAM_MESSAGE_LENGTH - 3] + "..."
     return text
@@ -56,6 +60,7 @@ def send_telegram_notification(message: str) -> bool:
         "chat_id": chat_id,
         "text": message,
         "disable_web_page_preview": True,
+        "parse_mode": "MarkdownV2"
     }
 
     try:
@@ -71,3 +76,7 @@ def send_telegram_notification(message: str) -> bool:
     except Exception as e:
         print(f"Исключение при отправке уведомления в Telegram: {e}", file=sys.stderr)
         return False
+
+def escape_markdown(text: str) -> str:
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    return "".join(f"\\{c}" if c in escape_chars else c for c in text)

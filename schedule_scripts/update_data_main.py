@@ -35,6 +35,7 @@ def func_update_protocols(different_list_of_protocols):
     updated = 0
     no_changes = 0
     errors = 0
+    updated_protocols = []
 
     total = len(different_list_of_protocols)
 
@@ -48,6 +49,9 @@ def func_update_protocols(different_list_of_protocols):
 
             if result["status"] == "updated":
                 updated += 1
+                updated_protocols.append(
+                    f"{row['name_point']} — {row['date_event'].strftime('%Y-%m-%d')}"
+                )
             else:
                 no_changes += 1
 
@@ -75,6 +79,7 @@ def func_update_protocols(different_list_of_protocols):
         "no_changes": no_changes,
         "errors": errors,
         "total": len(different_list_of_protocols),
+        "updated_protocols": updated_protocols,
     }
 
 def list_point_update():

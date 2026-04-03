@@ -3,7 +3,7 @@ import random
 from update_data_functions import get_link_protocols_for_update, compare_and_update_single_protocol
 from update_protocols import refresh_protocol_materialized_views
 from .update_data_main import credential
-from telegram_notifier import send_telegram_notification
+from telegram_notifier import send_telegram_notification, escape_markdown
 from datetime import datetime
 
 def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_first_limit=None):
@@ -34,6 +34,7 @@ def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_fir
     updated = 0
     no_changes = 0
     errors = 0
+    updated_protocols = []
 
     total = len(list_protocols)
 
@@ -47,6 +48,9 @@ def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_fir
 
             if result["status"] == "updated":
                 updated += 1
+                updated_protocols.append(
+                    f"{row['name_point']} — {row['date_event'].strftime('%Y-%m-%d')}"
+                )
             else:
                 no_changes += 1
 
@@ -76,19 +80,46 @@ def find_dif_details_protocol(count_last_protocol=3, name_point=None, oldest_fir
 
     park_text = "все парки"
     if name_point:
-        park_text = f"парки: {', '.join(name_point[:10])}"
-        if len(name_point) > 10:
-            park_text += f" ... (+{len(name_point) - 10})"
+        park_text = f"парки: {', '.join(name_point)}"
 
-    message = (
-        f"🔄 update_recent_by_count\n"
-        f"Режим: {mode_text}\n"
-        f"Область: {park_text}\n"
-        f"Проверено протоколов: {len(list_protocols)}\n"
-        f"Обновлено: {updated}\n"
-        f"Без изменений: {no_changes}\n"
-        f"Ошибок: {errors}"
-    )
+    mode_text_escaped = escape_markdown(mode_text)
+    park_text_escaped = escape_markdown(park_text)
+
+    if errors > 0:
+        status_emoji = "🟠"
+    elif updated > 0:
+        status_emoji = "🟢"
+    else:
+        status_emoji = "⚪"
+
+    updated_list_text = ""
+    if updated_protocols:
+        updated_list_text = "\n\n*Обновлённые протоколы:*\n"
+        for item in updated_protocols:
+            updated_list_text += f"• {escape_markdown(item)}\n"
+
+    if updated == 0:
+        message = (
+            f"*__{status_emoji} update\\_recent\\_by\\_count__*\n\n"
+            f"*Режим:* {mode_text_escaped}\n"
+            f"*Область:* {park_text_escaped}\n"
+            f"*Проверено:* {len(list_protocols)}\n"
+            f"*Обновлено:* {updated}\n"
+            f"*Без изменений:* {no_changes}\n"
+            f"*Ошибок:* {errors}\n\n"
+            f"Изменений в протоколах не найдено\\."
+        )
+    else:
+        message = (
+            f"*__{status_emoji} update\\_recent\\_by\\_count__*\n\n"
+            f"*Режим:* {mode_text_escaped}\n"
+            f"*Область:* {park_text_escaped}\n"
+            f"*Проверено:* {len(list_protocols)}\n"
+            f"*Обновлено:* {updated}\n"
+            f"*Без изменений:* {no_changes}\n"
+            f"*Ошибок:* {errors}"
+            f"{updated_list_text}"
+        )
 
     send_telegram_notification(message)
 
