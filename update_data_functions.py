@@ -331,37 +331,89 @@ def find_dif_list_protocol(list_site_protocols, now_table):
     return diff_right.sort_values(by=['date_event', 'name_point'], ascending=True).reset_index(drop=True)
 
 def get_now_protocols(credential, different_list_of_protocols):
-    '''Функция собирает 2 df с текущей информацией из протоколов, которая находится в БД'''
+    """Собирает 2 df с текущей информацией из БД по выбранным протоколам."""
     engine = db.db_connect(credential)
 
-    result_run, result_vol = pd.DataFrame(), pd.DataFrame()
-    for _, row in different_list_of_protocols.iterrows():
-        сondition = [{'name_point': row['name_point']}, {'date_event': row['date_event']}] #Формируем условие
-        temp_result_run = db.get_inf_with_condition(engine, 'details_protocol', сondition)
-        temp_result_vol = db.get_inf_with_condition(engine, 'details_vol', сondition)
-        result_run = pd.concat([result_run, temp_result_run], ignore_index=True)
-        # Проверяем наличие данных в temp_result_vol перед конкатенацией
-        if not temp_result_vol.empty and not temp_result_vol.isna().all(axis=None):
-            result_vol = pd.concat([result_vol, temp_result_vol], ignore_index=True)
-        else:
-            # Можно оставить сообщение для отладки или вообще ничего не делать
-            pass
+    run_columns = [
+        'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id',
+        'position', 'finish_time', 'age_category', 'status_runner'
+    ]
+    vol_columns = [
+        'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id', 'vol_role'
+    ]
 
-    result_run = result_run.drop(columns=['updated_at'])
-    if len(result_vol) != 0:
-        result_vol = result_vol.drop(columns=['updated_at'])
+    result_run = pd.DataFrame(columns=run_columns)
+    result_vol = pd.DataFrame(columns=vol_columns)
+
+    run_frames = []
+    vol_frames = []
+
+    for _, row in different_list_of_protocols.iterrows():
+        condition = [
+            {'name_point': row['name_point']},
+            {'date_event': row['date_event']}
+        ]
+
+        temp_result_run = db.get_inf_with_condition(engine, 'details_protocol', condition)
+        temp_result_vol = db.get_inf_with_condition(engine, 'details_vol', condition)
+
+        if temp_result_run is not None and not temp_result_run.empty and not temp_result_run.isna().all(axis=None):
+            temp_result_run = temp_result_run.drop(columns=['updated_at'], errors='ignore')
+            temp_result_run = temp_result_run.reindex(columns=run_columns)
+            run_frames.append(temp_result_run)
+
+        if temp_result_vol is not None and not temp_result_vol.empty and not temp_result_vol.isna().all(axis=None):
+            temp_result_vol = temp_result_vol.drop(columns=['updated_at'], errors='ignore')
+            temp_result_vol = temp_result_vol.reindex(columns=vol_columns)
+            vol_frames.append(temp_result_vol)
+
+        # один concat в конце
+        result_run = pd.concat(run_frames, ignore_index=True) if run_frames else pd.DataFrame(columns=run_columns)
+        result_vol = pd.concat(vol_frames, ignore_index=True) if vol_frames else pd.DataFrame(columns=vol_columns)
 
     return result_run, result_vol
 
-def find_dif_protocol(actual_df, not_actual_df):
-    '''Функция ищет отличия в двух датафреймах и возвращает df для добавления в БД и df со строчками для удаления из БД данных'''
-    diff_left = not_actual_df.merge(actual_df, how='left', indicator=True)
-    diff_right = not_actual_df.merge(actual_df, how='right', indicator=True)
-    for_delete = diff_left[diff_left['_merge'] != 'both']
-    to_add = diff_right[diff_right['_merge'] != 'both']
 
-    for_delete = for_delete.drop(columns=['_merge'])
-    to_add = to_add.drop(columns=['_merge'])
+def find_dif_protocol(actual_df, not_actual_df):
+    """
+    Ищет отличия между актуальным df (с сайта) и текущим df (из БД).
+    Возвращает:
+    - for_delete: что удалить из БД
+    - to_add: что добавить в БД
+    """
+
+    actual_df = actual_df.copy()
+    not_actual_df = not_actual_df.copy()
+
+    # если один из df пришёл вообще без колонок, но второй со схемой —
+    # подгоняем пустой под схему второго
+    if len(actual_df.columns) == 0 and len(not_actual_df.columns) > 0:
+        actual_df = pd.DataFrame(columns=not_actual_df.columns)
+
+    if len(not_actual_df.columns) == 0 and len(actual_df.columns) > 0:
+        not_actual_df = pd.DataFrame(columns=actual_df.columns)
+
+    common_cols = [col for col in actual_df.columns if col in not_actual_df.columns]
+
+    # если оба вообще пустые и без колонок — просто возвращаем пустые df
+    if not common_cols and actual_df.empty and not_actual_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    if not common_cols:
+        raise ValueError(
+            "Нет общих колонок для сравнения протоколов. "
+            f"actual_df columns={list(actual_df.columns)}, "
+            f"not_actual_df columns={list(not_actual_df.columns)}"
+        )
+
+    actual_df = actual_df.reindex(columns=common_cols).copy()
+    not_actual_df = not_actual_df.reindex(columns=common_cols).copy()
+
+    diff_left = not_actual_df.merge(actual_df, on=common_cols, how='left', indicator=True)
+    diff_right = not_actual_df.merge(actual_df, on=common_cols, how='right', indicator=True)
+
+    for_delete = diff_left[diff_left['_merge'] != 'both'].drop(columns=['_merge']).reset_index(drop=True)
+    to_add = diff_right[diff_right['_merge'] != 'both'].drop(columns=['_merge']).reset_index(drop=True)
 
     return for_delete, to_add
 
@@ -406,21 +458,14 @@ def compare_and_update_single_protocol(credential, protocol_row, update_summary_
     for_removal_runner, to_add_runner = find_dif_protocol(actual_run, now_run)
 
     # 4. Сравнение волонтёров
-    if actual_vol is None:
-        if now_vol.empty:
-            actual_vol_for_compare = pd.DataFrame(
-                columns=["name_point", "date_event", "name_runner", "link_runner", "user_id", "vol_role"]
-            )
-        else:
-            actual_vol_for_compare = pd.DataFrame(columns=now_vol.columns)
+    if actual_vol is None or actual_vol.empty:
+        actual_vol_for_compare = pd.DataFrame(
+            columns=["name_point", "date_event", "name_runner", "link_runner", "user_id", "vol_role"]
+        )
     else:
-        actual_vol_for_compare = actual_vol
+        actual_vol_for_compare = actual_vol.copy()
 
-    if now_vol.empty and actual_vol_for_compare.empty:
-        for_removal_vol = pd.DataFrame(columns=["name_point", "date_event", "user_id", "vol_role"])
-        to_add_vol = pd.DataFrame(columns=["name_point", "date_event", "name_runner", "link_runner", "user_id", "vol_role"])
-    else:
-        for_removal_vol, to_add_vol = find_dif_protocol(actual_vol_for_compare, now_vol)
+    for_removal_vol, to_add_vol = find_dif_protocol(actual_vol_for_compare, now_vol)
 
     # 5. Нужно ли обновлять строку list_all_events
     different_list_of_protocols = pd.DataFrame()
