@@ -115,51 +115,42 @@ def get_list_protocol(new_data):
     парсим сами протоколы и собираем это в единую таблицу.
     После каждой итерации добавляется случайная задержка от 10 до 20 секунд.
     """
-    data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
+    run_columns = [
+        'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id',
+        'position', 'finish_time', 'age_category', 'status_runner'
+    ]
+    vol_columns = [
+        'name_point', 'date_event', 'name_runner', 'link_runner', 'user_id', 'vol_role'
+    ]
+
+    run_frames = []
+    vol_frames = []
 
     for _, row in new_data.iterrows():
         link = row['link_event']
         final_df_run, final_df_vol = pp.main_parse(link)
-        data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
-        data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
 
-        print(f'\t{row["date_event"]} - {row["name_point"]}: '
-              f'{row["count_runners"]} участников, {row["count_vol"]} волонтеров')
+        if final_df_run is not None and not final_df_run.empty:
+            final_df_run = final_df_run.reindex(columns=run_columns)
+            run_frames.append(final_df_run)
 
-        # 💤 случайная задержка между запросами
+        if final_df_vol is not None and not final_df_vol.empty:
+            final_df_vol = final_df_vol.reindex(columns=vol_columns)
+            vol_frames.append(final_df_vol)
+
+        print(
+            f'\t{row["date_event"]} - {row["name_point"]}: '
+            f'{row["count_runners"]} участников, {row["count_vol"]} волонтеров'
+        )
+
         delay = random.uniform(10, 20)
         print(f'Пауза {delay:.1f} сек перед следующим протоколом...')
         time.sleep(delay)
 
-    return data_protocols, data_protocol_vol
+    data_protocols = pd.concat(run_frames, ignore_index=True) if run_frames else pd.DataFrame(columns=run_columns)
+    data_protocol_vol = pd.concat(vol_frames, ignore_index=True) if vol_frames else pd.DataFrame(columns=vol_columns)
 
-# def add_new_protocols(credential, new_data, data_protocols, data_protocol_vol):
-#     '''Проверяем наличие протоколов, которые можно записать в БД, записываем + парсим детали протокола и записываем их в базу'''
-#     #engine = db.db_connect(credential)
-#     # new_data = check_new_protocols(credential)
-#     # if len(new_data) == 0:
-#     #     return
-#     # print(f'Есть {len(new_data)} протоколов для записи в БД')
-#     engine = db.db_connect(credential)
-#     db.append_df(engine, 'list_all_events', new_data)
-#     #data_protocols, data_protocol_vol = pd.DataFrame(), pd.DataFrame()
-#
-#     # for _, row in new_data.iterrows():
-#     #     link = row['link_event']
-#     #     final_df_run, final_df_vol = pp.main_parse(link)
-#     #     data_protocols = pd.concat([data_protocols, final_df_run], ignore_index=True)
-#     #     data_protocol_vol = pd.concat([data_protocol_vol, final_df_vol], ignore_index=True)
-#     #     print(f'\t{row["date_event"]} - {row["name_point"]}: {row["count_runners"]} участников, {row["count_vol"]} волонтеров')
-#
-#     #engine = db.db_connect(credential)
-#     db.append_df(engine, 'details_protocol', data_protocols)
-#     db.update_view(engine, 'new_turists')
-#
-#     #engine = db.db_connect(credential)
-#     db.append_df(engine, 'details_vol', data_protocol_vol)
-#     db.update_view(engine, 'new_turists_vol')
-#
-#     return print(f'В БД Записано {len(new_data)} протоколов, {len(data_protocols)} строчек бегунов, {len(data_protocol_vol)} строчек волонтеров')
+    return data_protocols, data_protocol_vol
 
 def add_new_protocols(credential, new_data, data_protocols, data_protocol_vol):
     """
@@ -237,29 +228,37 @@ def add_new_protocols(credential, new_data, data_protocols, data_protocol_vol):
     )
 
 def get_list_all_protocol(credential):
-    '''Функция собирает данные со страниц всех протоколов каждого парка + получает из БД аналогичную таблицу, чтобы потом сравнить'''
+    """Собирает данные со страниц всех протоколов каждого парка + получает из БД аналогичную таблицу."""
     engine = db.db_connect(credential)
-    # Берем ссылки на локации из БД и таблицу, с которой в дальнейшем будем сравнивать собранный ниже df
-    request = 'SELECT general_link_all_location.* FROM general_link_all_location join general_location gl using (name_point) where is_pause = false'
-    result = db.execute_request(engine, request)
-    #result = result.iloc[121:] #Если нужно обновить данные по частям
 
-    #Часть ниже реализована для запуска скрипта не на весь пул протоколов, а на часть
+    request = '''
+    SELECT general_link_all_location.*
+    FROM general_link_all_location
+    JOIN general_location gl USING (name_point)
+    WHERE is_pause = false
+    '''
+    result = db.execute_request(engine, request)
+
     where_conditions = []
     for _, row in result.iterrows():
         value = row['name_point']
         where_conditions.append(f"name_point ='{value}'")
     where_clause = " OR ".join(where_conditions)
 
-    request_now = f'SELECT list_all_events.* FROM list_all_events join general_location gl using (name_point) where is_pause = false and {where_clause}'
+    request_now = f'''
+    SELECT list_all_events.*
+    FROM list_all_events
+    JOIN general_location gl USING (name_point)
+    WHERE is_pause = false AND {where_clause}
+    '''
 
     table = db.execute_request(engine, request_now)
     table = table.drop(columns=['updated_at'])
-    empty_df = pd.DataFrame()
+
+    protocol_frames = []
+    skipped = []
 
     count = len(result)
-    # Собираем в единый df все данные со списком протоколов каждой локации
-    skipped = []
     show_progress = sys.stdout.isatty() or os.environ.get("PYCHARM_HOSTED") == "1"
 
     for _, row in tqdm(result.iterrows(), total=count, disable=not show_progress):
@@ -267,21 +266,22 @@ def get_list_all_protocol(credential):
 
         raw = ptpp.list_protocols_in_park(link)
         if raw.empty:
-            # если это из-за 404 — мы уже напечатали предупреждение.
-            # здесь просто зафиксируем парк для финального отчёта
             skipped.append(row["name_point"])
             continue
 
         all_point_protocol = ptpp.transform_df_list_protocol(raw)
-        empty_df = pd.concat([empty_df, all_point_protocol], ignore_index=True)
+        if all_point_protocol is not None and not all_point_protocol.empty:
+            protocol_frames.append(all_point_protocol)
 
-        # Задержка от 10 до 20 секунд
         delay = random.uniform(10, 20)
         time.sleep(delay)
-    #print(len(empty_df), len(table))
+
+    empty_df = pd.concat(protocol_frames, ignore_index=True) if protocol_frames else pd.DataFrame()
+
     if skipped:
         print(f"⚠️ Пропущены парки (не удалось получить список протоколов): {len(skipped)}")
         print(", ".join(skipped))
+
     print('Спарсили списки всех протоколов для сравнения')
     return empty_df, table
 
@@ -375,18 +375,10 @@ def get_now_protocols(credential, different_list_of_protocols):
 
 
 def find_dif_protocol(actual_df, not_actual_df):
-    """
-    Ищет отличия между актуальным df (с сайта) и текущим df (из БД).
-    Возвращает:
-    - for_delete: что удалить из БД
-    - to_add: что добавить в БД
-    """
-
+    """Ищет отличия в двух датафреймах и возвращает df для добавления и удаления."""
     actual_df = actual_df.copy()
     not_actual_df = not_actual_df.copy()
 
-    # если один из df пришёл вообще без колонок, но второй со схемой —
-    # подгоняем пустой под схему второго
     if len(actual_df.columns) == 0 and len(not_actual_df.columns) > 0:
         actual_df = pd.DataFrame(columns=not_actual_df.columns)
 
@@ -395,7 +387,6 @@ def find_dif_protocol(actual_df, not_actual_df):
 
     common_cols = [col for col in actual_df.columns if col in not_actual_df.columns]
 
-    # если оба вообще пустые и без колонок — просто возвращаем пустые df
     if not common_cols and actual_df.empty and not_actual_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
