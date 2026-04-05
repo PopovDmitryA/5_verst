@@ -1,46 +1,28 @@
 import re
 import time
 import random
-import requests
 import configparser
 import pandas as pd
 from tqdm import tqdm
-from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from pathlib import Path
+from s95_http_client import S95HttpClient, S95BanDetected, S95TemporaryError, S95HttpError
 
-session = requests.Session()
-session.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Connection": "keep-alive",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Upgrade-Insecure-Requests": "1",
-    "Referer": "https://s95.ru/",
-})
 
 # =========================
 # Функция парсинга протокола
 # =========================
-def parse_protocol(page, name_point, date_event):
+def parse_protocol(page, name_point, date_event, client):
     parsed = urlparse(page)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    resp = session.get(
+    soup = client.get_soup(
         page,
-        timeout=(10, 60)  # 5 сек connect, 60 сек read
+        allow_ban_html_check=True,
+        sleep_before=True
     )
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, 'html.parser')
 
     # ---------- Протокол (бегуны) ----------
     protocol = soup.find('div', {'class': 'tab-pane', 'id': re.compile(r'^\w+')}) \
@@ -172,9 +154,6 @@ def parse_protocol(page, name_point, date_event):
 
     return df_runner, df_vol
 
-def increase_backoff(current, factor=2, maximum=1800):
-    return min(current * factor, maximum)
-
 def log(msg: str):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
@@ -209,15 +188,40 @@ if __name__ == "__main__":
         max_overflow=10,
     )
 
+    client = S95HttpClient(
+        connect_timeout=10,
+        read_timeout=60,
+        min_delay=1.5,
+        max_delay=3.5,
+        cooldown_seconds=1800,
+        max_retries=2,
+    )
+
     # Получаем список протоколов, которые ещё не загружены
     query = """
-        SELECT e.link_event, e.date_event, e.name_point
+    WITH missing_events AS (
+        SELECT
+            e.link_event,
+            e.date_event,
+            e.name_point,
+            ROW_NUMBER() OVER (
+                PARTITION BY e.name_point
+                ORDER BY e.date_event
+            ) AS rn
         FROM s95_list_all_events e
         WHERE NOT EXISTS (
-            SELECT 1 FROM s95_details_protocol p
-            WHERE p.name_point = e.name_point AND p.date_event = e.date_event
+            SELECT 1
+            FROM s95_details_protocol p
+            WHERE p.name_point = e.name_point
+              AND p.date_event = e.date_event
         )
-        ORDER BY e.date_event
+    )
+    SELECT
+        link_event,
+        date_event,
+        name_point
+    FROM missing_events
+    ORDER BY rn, date_event, name_point
     """
     events = pd.read_sql(query, engine)
 
@@ -225,146 +229,85 @@ if __name__ == "__main__":
     MIN_SLEEP_BETWEEN_EVENTS = 120  # минимум 2 минуты между событиями
     MAX_SLEEP_BETWEEN_EVENTS = 300  # максимум 5 минут между событиями
 
+    SESSION_RESET_MIN = 8
+    SESSION_RESET_MAX = 15
+
+    next_reset_at = random.randint(SESSION_RESET_MIN, SESSION_RESET_MAX)
+    processed = 0
+
     BATCH_SIZE = 10  # каждые 10 протоколов
     BATCH_SLEEP = 600  # 10 минут
 
     BAN_STRIKES_LIMIT = 3  # после 2-3 банов завершаемся
     ban_strikes = 0  # счётчик банов
+    TEMP_ERROR_SLEEP = 150
 
-    MAX_RETRIES = 1  # в slow mode лучше не долбить один URL повторно
-    consecutive_429 = 0
-    consecutive_403 = 0
-    ban_backoff = 150  # стартовая пауза (2,5 минуты)
-    MAX_BAN_BACKOFF = 1800  # максимум 30 минут
-    #MAX_RETRIES = 2
-    BASE_SLEEP_SUCCESS = (45.0, 120.0)
-    SLEEP_READ_TIMEOUT = 150
-    SLEEP_CONNECTION_ERROR = 150
-    BAN_COOLDOWN_TRIGGER = 3  # после скольких бан-сигналов подряд включаем "режим бана"
-    ban_signals_streak = 0  # подряд бан-сигналов
     for i, row in tqdm(events.iterrows(), total=len(events), desc="Обработка протоколов"):
-        if ban_backoff >= MAX_BAN_BACKOFF:
-            print("Достигнут максимальный ban_backoff — останавливаю скрипт, чтобы не долбиться в бан.")
-            break
         success = False
 
-        for attempt in range(1, MAX_RETRIES + 1):
-            time.sleep(random.uniform(1.5, 3.5))
+        try:
+            df_runner, df_vol = parse_protocol(
+                row['link_event'],
+                row['name_point'],
+                row['date_event'],
+                client
+            )
+
+            with engine.begin() as conn:
+                if not df_runner.empty:
+                    df_runner.to_sql('s95_details_protocol', conn, if_exists='append', index=False)
+                if not df_vol.empty:
+                    df_vol.to_sql('s95_details_vol', conn, if_exists='append', index=False)
+
+            sleep_range(MIN_SLEEP_BETWEEN_EVENTS, MAX_SLEEP_BETWEEN_EVENTS, "после успеха")
+            success = True
+
+        except S95BanDetected as e:
+            ban_strikes += 1
+            log(f"BAN #{ban_strikes}: {e}")
+            if ban_strikes >= BAN_STRIKES_LIMIT:
+                log("Достигнут лимит банов — завершаю скрипт.")
+                raise SystemExit(2)
+            log("Ban-like signal получен, прерываем текущий прогон.")
+
+        except S95TemporaryError as e:
+            log(f"Временная сетевая ошибка для {row['link_event']}: {e}")
+            time.sleep(TEMP_ERROR_SLEEP)
+
+        except S95HttpError as e:
+            log(f"HTTP ошибка для {row['link_event']}: {e}")
+
+        except SQLAlchemyError as e:
+            print(f"DB ошибка для {row['link_event']}: {e}. Пересоздаю engine и жду 60s.")
             try:
-                df_runner, df_vol = parse_protocol(
-                    row['link_event'],
-                    row['name_point'],
-                    row['date_event']
-                )
+                engine.dispose()
+            except Exception:
+                pass
+            engine = create_engine(
+                credential,
+                pool_pre_ping=True,
+                pool_recycle=900,
+                pool_size=5,
+                max_overflow=10,
+            )
+            time.sleep(60)
 
-                # запись в БД
-                with engine.begin() as conn:
-                    if not df_runner.empty:
-                        df_runner.to_sql('s95_details_protocol', conn, if_exists='append', index=False)
-                    if not df_vol.empty:
-                        df_vol.to_sql('s95_details_vol', conn, if_exists='append', index=False)
-
-                # успех
-                sleep_range(MIN_SLEEP_BETWEEN_EVENTS, MAX_SLEEP_BETWEEN_EVENTS, "после успеха")
-                consecutive_429 = 0
-                consecutive_403 = 0
-                ban_signals_streak = 0
-                ban_backoff = 150  # можешь оставить, но он в slow mode почти не нужен
-                success = True
-                break
-
-            except requests.exceptions.HTTPError as e:
-                status = e.response.status_code if e.response else None
-                if e.response is None:
-                    ban_strikes += 1
-                    log(f"BAN #{ban_strikes}: HTTPError without response для {row['link_event']}")
-                    if ban_strikes >= BAN_STRIKES_LIMIT:
-                        log("Достигнут лимит банов — завершаю скрипт.")
-                        raise SystemExit(2)
-
-                    # после бана спим дольше, чем обычные 2–5 минут
-                    log(f"Сон {BATCH_SLEEP}s (после BAN без ответа)")
-                    time.sleep(BATCH_SLEEP)
-                    break
-                elif status == 429:
-                    consecutive_429 += 1
-                    print(f"429 ({consecutive_429}) для {row['link_event']}")
-                    if consecutive_429 >= 10:
-                        print("10 подряд 429 — останавливаем скрипт")
-                        raise
-                    time.sleep(random.randint(20, 30))
-                    continue
-
-                elif status == 403:
-                    ban_strikes += 1
-                    log(f"BAN #{ban_strikes}: 403 Forbidden для {row['link_event']}")
-                    if ban_strikes >= BAN_STRIKES_LIMIT:
-                        log("Достигнут лимит банов — завершаю скрипт.")
-                        raise SystemExit(2)
-
-                    log(f"Сон {BATCH_SLEEP}s (после 403)")
-                    time.sleep(BATCH_SLEEP)
-                    break
-
-                else:
-                    print(f"HTTP ошибка {status} для {row['link_event']}")
-                    ban_signals_streak = 0
-                    consecutive_403 = 0
-                    time.sleep(random.randint(30, 60))
-                    break
-
-            except requests.exceptions.ReadTimeout:
-                print(f"ReadTimeout ({attempt}/{MAX_RETRIES}): {row['link_event']}")
-                ban_signals_streak += 1  # мягкий сигнал перегруза
-                time.sleep(SLEEP_READ_TIMEOUT)
-
-                # увеличиваем backoff мягко (не x2), например x1.3
-                ban_backoff = min(int(ban_backoff * 1.3), MAX_BAN_BACKOFF)
-
-                if ban_signals_streak >= BAN_COOLDOWN_TRIGGER:
-                    extra = min(ban_backoff, MAX_BAN_BACKOFF)
-                    print(f"BAN mode (timeout): {ban_signals_streak} подряд, доп.пауза {extra}s")
-                    time.sleep(extra)
-
-                continue
-
-            except requests.exceptions.ConnectionError:
-                ban_strikes += 1
-                log(f"BAN #{ban_strikes}: ConnectionError для {row['link_event']}")
-                if ban_strikes >= BAN_STRIKES_LIMIT:
-                    log("Достигнут лимит банов — завершаю скрипт.")
-                    raise SystemExit(2)
-
-                log(f"Сон {BATCH_SLEEP}s (после ConnectionError)")
-                time.sleep(BATCH_SLEEP)
-                break
-
-            except (SQLAlchemyError,) as e:
-                print(f"DB ошибка для {row['link_event']}: {e}. Пересоздаю engine и жду 60s.")
-                try:
-                    engine.dispose()
-                except Exception:
-                    pass
-                engine = create_engine(
-                    credential,
-                    pool_pre_ping=True,
-                    pool_recycle=900,
-                    pool_size=5,
-                    max_overflow=10,
-                )
-                time.sleep(60)
-                continue
-
-            except Exception as e:
-                print(f"Неожиданная ошибка {row['link_event']}: {e}")
-                break
+        except Exception as e:
+            print(f"Неожиданная ошибка {row['link_event']}: {e}")
 
         if not success:
-            # минимальная пауза даже после "быстрого" отказа, чтобы не устроить штурм
             sleep_range(MIN_SLEEP_BETWEEN_EVENTS, MAX_SLEEP_BETWEEN_EVENTS, "после неуспеха")
-            log(f"Пропускаем протокол после {MAX_RETRIES} попыток: {row['link_event']}")
+            log(f"Пропускаем протокол после неуспешной обработки: {row['link_event']}")
             continue
 
         if (i + 1) % BATCH_SIZE == 0:
             log(f"Пакет из {BATCH_SIZE} протоколов обработан, сон {BATCH_SLEEP}s")
             time.sleep(BATCH_SLEEP)
+
+        processed += 1
+
+        if processed >= next_reset_at:
+            client.reset_session()
+            time.sleep(random.uniform(10, 30))
+            processed = 0
+            next_reset_at = random.randint(SESSION_RESET_MIN, SESSION_RESET_MAX)

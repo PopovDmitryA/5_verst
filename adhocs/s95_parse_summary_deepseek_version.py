@@ -1,13 +1,13 @@
 import configparser
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from s95_http_client import S95HttpClient, S95BanDetected, S95TemporaryError, S95HttpError
 import traceback
-
 import random
 import time
 from pathlib import Path
 import pandas as pd
 from urllib.parse import urlparse
+
 
 def parse_time_string(time_str):
     """Преобразуем строку вида '20:07' или '1:02:30' в формат hh:mm:ss"""
@@ -19,6 +19,7 @@ def parse_time_string(time_str):
     elif len(parts) == 3:  # hh:mm:ss
         return f"{int(parts[0]):02d}:{int(parts[1]):02d}:{int(parts[2]):02d}"
     return None
+
 
 def list_protocol_location(page, client):
     """Парсим страницу локации и приводим данные к нужным типам"""
@@ -82,9 +83,9 @@ def list_protocol_location(page, client):
 
         # Мужчина
         if man_text and '(' in man_text and ')' in man_text:
-            name, time = man_text.rsplit('(', 1)
+            name, time_str = man_text.rsplit('(', 1)
             first_man_list.append(name.strip())
-            best_time_man_list.append(parse_time_string(time.replace(')', '').strip()))
+            best_time_man_list.append(parse_time_string(time_str.replace(')', '').strip()))
         elif man_text:
             first_man_list.append(man_text.strip())
             best_time_man_list.append(None)
@@ -94,9 +95,9 @@ def list_protocol_location(page, client):
 
         # Женщина
         if woman_text and '(' in woman_text and ')' in woman_text:
-            name, time = woman_text.rsplit('(', 1)
+            name, time_str = woman_text.rsplit('(', 1)
             first_woman_list.append(name.strip())
-            best_time_woman_list.append(parse_time_string(time.replace(')', '').strip()))
+            best_time_woman_list.append(parse_time_string(time_str.replace(')', '').strip()))
         elif woman_text:
             first_woman_list.append(woman_text.strip())
             best_time_woman_list.append(None)
@@ -115,10 +116,15 @@ def list_protocol_location(page, client):
         df[col] = pd.to_datetime(df[col], format='%H:%M:%S', errors='coerce').dt.time
 
     for col in ['index_event', 'count_runners', 'count_vol']:
-        df[col] = pd.to_numeric(df.get(col), errors='coerce').astype('Int64')
+        if col in df.columns:
+            df[col] = pd.to_numeric(df.get(col), errors='coerce').astype('Int64')
 
-    df['date_event'] = pd.to_datetime(df.get('date_event'), format='%d.%m.%Y', errors='coerce')
-    df['link_event'] = df['link_event'].astype('string')
+    if 'date_event' in df.columns:
+        df['date_event'] = pd.to_datetime(df.get('date_event'), format='%d.%m.%Y', errors='coerce')
+
+    if 'link_event' in df.columns:
+        df['link_event'] = df['link_event'].astype('string')
+
     df['first_man'] = df['first_man'].astype('string')
     df['first_woman'] = df['first_woman'].astype('string')
 
@@ -128,6 +134,7 @@ def list_protocol_location(page, client):
             df = df.drop(columns=[col])
 
     return df
+
 
 def save_summary_and_mark_checked(df_events, link_point, conn):
     """
@@ -141,7 +148,7 @@ def save_summary_and_mark_checked(df_events, link_point, conn):
             SET last_summary_checked_at = NOW()
             WHERE link_point = :link_point
         """
-        conn.exec_driver_sql(update_query, {"link_point": link_point})
+        conn.execute(text(update_query), {"link_point": link_point})
         return 0
 
     df_events = df_events.drop_duplicates(subset=['name_point', 'date_event']).copy()
@@ -174,14 +181,17 @@ def save_summary_and_mark_checked(df_events, link_point, conn):
             index=False
         )
 
+    # ВАЖНО: Обновляем last_summary_checked_at ДЛЯ ВСЕХ ОБРАБОТАННЫХ ЛОКАЦИЙ
+    # Даже если не добавили новых записей, нужно обновить время проверки
     update_query = """
         UPDATE s95_location
         SET last_summary_checked_at = NOW()
         WHERE link_point = :link_point
     """
-    conn.exec_driver_sql(update_query, {"link_point": link_point})
+    conn.execute(text(update_query), {"link_point": link_point})
 
     return len(new_rows_df)
+
 
 # --- Подключение к БД ---
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -214,10 +224,11 @@ MAX_SLEEP_BETWEEN_LOCATIONS = 180
 # --- Получаем список локаций ---
 raw_value = input("Сколько парков проверить? 0 = все: ").strip()
 parks_to_check = int(raw_value) if raw_value else 0
+
 base_query_locations = """
     SELECT name_point, link_point, last_summary_checked_at
     FROM s95_location
-    WHERE link_point IS NOT NULL
+    WHERE link_point IS NOT NULL and is_pause is not true
     ORDER BY last_summary_checked_at NULLS FIRST, name_point
 """
 
@@ -227,17 +238,28 @@ else:
     query_locations = base_query_locations + f" LIMIT {parks_to_check}"
     locations_df = pd.read_sql(query_locations, engine)
 
+# Показываем список локаций для проверки
+print(f"\nНайдено локаций для обработки: {len(locations_df)}")
+for i, row in locations_df.iterrows():
+    last_checked = row['last_summary_checked_at']
+    last_checked_str = last_checked.strftime('%Y-%m-%d %H:%M:%S') if last_checked else 'никогда'
+    print(f"  {i + 1}. {row['name_point']} (последняя проверка: {last_checked_str})")
+print()
+
 # --- Проходим по каждой ссылке ---
 SESSION_RESET_MIN = 4
 SESSION_RESET_MAX = 8
 
 processed_locations = 0
 next_reset_at = random.randint(SESSION_RESET_MIN, SESSION_RESET_MAX)
+
 for idx, row in locations_df.iterrows():
     name_point = row['name_point']
     link_point = row['link_point']
 
+    print(f"\n{'=' * 60}")
     print(f"Обрабатываем локацию: {name_point} | {link_point}")
+    print(f"{'=' * 60}")
 
     try:
         df_events = list_protocol_location(link_point, client)
@@ -246,7 +268,7 @@ for idx, row in locations_df.iterrows():
         with engine.begin() as conn:
             added_rows = save_summary_and_mark_checked(df_events, link_point, conn)
 
-        print(f"Успешно обработано: {name_point} ({len(df_events)} событий), добавлено новых: {added_rows}")
+        print(f"✅ Успешно обработано: {name_point} ({len(df_events)} событий), добавлено новых: {added_rows}")
 
         processed_locations += 1
 
@@ -258,37 +280,40 @@ for idx, row in locations_df.iterrows():
             processed_locations = 0
             next_reset_at = random.randint(SESSION_RESET_MIN, SESSION_RESET_MAX)
 
-        sleep_seconds = random.uniform(MIN_SLEEP_BETWEEN_LOCATIONS, MAX_SLEEP_BETWEEN_LOCATIONS)
-        print(f"Пауза {sleep_seconds:.0f}s после локации")
-        time.sleep(sleep_seconds)
+        # Проверяем, не последняя ли это локация
+        if idx < len(locations_df) - 1:
+            sleep_seconds = random.uniform(MIN_SLEEP_BETWEEN_LOCATIONS, MAX_SLEEP_BETWEEN_LOCATIONS)
+            print(f"😴 Пауза {sleep_seconds:.0f} секунд перед следующей локацией")
+            time.sleep(sleep_seconds)
+        else:
+            print(f"\n🏁 Все {len(locations_df)} локаций обработаны!")
 
     except S95BanDetected as e:
-        print(f"\nBAN signal при обработке локации: {name_point}")
+        print(f"\n🚫 BAN сигнал при обработке локации: {name_point}")
         print(f"Ссылка: {link_point}")
         print(f"Сообщение: {e}")
         print("Останавливаем прогон.\n")
         break
 
     except S95TemporaryError as e:
-        print(f"\nВременная сетевая ошибка при обработке локации: {name_point}")
+        print(f"\n⚠️ Временная сетевая ошибка при обработке локации: {name_point}")
         print(f"Ссылка: {link_point}")
         print(f"Сообщение: {e}")
         print("Пропускаем и продолжаем.\n")
         continue
 
     except S95HttpError as e:
-        print(f"\nHTTP ошибка при обработке локации: {name_point}")
+        print(f"\n❌ HTTP ошибка при обработке локации: {name_point}")
         print(f"Ссылка: {link_point}")
         print(f"Сообщение: {e}")
         print("Пропускаем и продолжаем.\n")
         continue
 
     except Exception as e:
-        print(f"\nОшибка при обработке локации: {name_point}")
+        print(f"\n💥 Ошибка при обработке локации: {name_point}")
         print(f"Ссылка: {link_point}")
         print(f"Тип ошибки: {type(e).__name__}")
         print(f"Сообщение: {str(e)}")
         print("Traceback:")
         traceback.print_exc()
         print("\nПродолжаем со следующей локацией...\n")
-
