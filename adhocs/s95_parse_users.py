@@ -1,11 +1,11 @@
 import time
 import random
-import requests
 import configparser
 import pandas as pd
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from pathlib import Path
 from s95_http_client import S95HttpClient, S95BanDetected, S95TemporaryError, S95HttpError
 
@@ -28,12 +28,23 @@ def parse_runner_page(link_s95_runner, client):
     # Ищем план посещения (только русская версия)
     parse_plan = soup.find('div', {'class': 'badge bg-success mb-2'})
     if parse_plan:
-        text = parse_plan.get_text(strip=True)
-        planning = text.replace('Собирается в ', '').strip() if text.startswith('Собирается в ') else None
+        text_value = parse_plan.get_text(strip=True)
+        planning = text_value.replace('Собирается в ', '').strip() if text_value.startswith('Собирается в ') else None
     else:
         planning = None
 
     return s95_barcode, planning
+
+
+def log(msg: str):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
+
+
+def sleep_range(a: float, b: float, reason: str):
+    sec = random.uniform(a, b)
+    log(f"Сон {sec:.0f}s ({reason})")
+    time.sleep(sec)
 
 
 if __name__ == "__main__":
@@ -51,13 +62,21 @@ if __name__ == "__main__":
     db_name = config['five_verst_stats']['dbname']
 
     credential = f'postgresql://{db_user}:{db_pass}@{db_host}/{db_name}'
-    engine = create_engine(credential)
+    engine = create_engine(
+        credential,
+        pool_pre_ping=True,
+        pool_recycle=900,
+        pool_size=5,
+        max_overflow=10,
+    )
+
+    # Такие же защитные настройки, как в details_protocol
     client = S95HttpClient(
         connect_timeout=10,
-        read_timeout=20,
-        min_delay=1.0,
-        max_delay=3.0,
-        cooldown_seconds=1200,
+        read_timeout=60,
+        min_delay=1.5,
+        max_delay=3.5,
+        cooldown_seconds=1800,
         max_retries=2,
     )
 
@@ -72,7 +91,7 @@ if __name__ == "__main__":
             FROM s95_details_vol
             WHERE user_id IS NOT NULL
         )
-        SELECT 
+        SELECT
             c.s95_id,
             'https://s95.ru/athletes/' || c.s95_id AS link_s95_runner
         FROM combined_ids c
@@ -84,9 +103,30 @@ if __name__ == "__main__":
 
     if runners.empty:
         print("Новых участников для парсинга нет.")
-        exit()
+        raise SystemExit
+
+    print(f"Найдено новых участников для парсинга: {len(runners)}")
+
+    # ====== SLOW MODE как в details_protocol ======
+    MIN_SLEEP_BETWEEN_USERS = 120   # минимум 2 минуты
+    MAX_SLEEP_BETWEEN_USERS = 300   # максимум 5 минут
+
+    SESSION_RESET_MIN = 8
+    SESSION_RESET_MAX = 15
+
+    next_reset_at = random.randint(SESSION_RESET_MIN, SESSION_RESET_MAX)
+    processed = 0
+
+    BATCH_SIZE = 10
+    BATCH_SLEEP = 600  # 10 минут
+
+    BAN_STRIKES_LIMIT = 3
+    ban_strikes = 0
+    TEMP_ERROR_SLEEP = 150
 
     for i, row in tqdm(runners.iterrows(), total=len(runners), desc="Обработка участников"):
+        success = False
+
         s95_id = row['s95_id']
         link_s95_runner = row['link_s95_runner']
 
@@ -103,23 +143,56 @@ if __name__ == "__main__":
             with engine.begin() as conn:
                 df_insert.to_sql('s95_runners', conn, if_exists='append', index=False)
 
+            success = True
+            sleep_range(MIN_SLEEP_BETWEEN_USERS, MAX_SLEEP_BETWEEN_USERS, "после успеха")
 
         except S95BanDetected as e:
-            print(f"⛔ BAN signal для {link_s95_runner}: {e}")
-            break
+            ban_strikes += 1
+            log(f"BAN #{ban_strikes} для {link_s95_runner}: {e}")
+            if ban_strikes >= BAN_STRIKES_LIMIT:
+                log("Достигнут лимит банов — завершаю скрипт.")
+                raise SystemExit(2)
+            log("Ban-like signal получен, прерываем текущий прогон.")
 
         except S95TemporaryError as e:
-            print(f"⚠️ Временная сетевая ошибка для {link_s95_runner}: {e}")
-            continue
+            log(f"Временная сетевая ошибка для {link_s95_runner}: {e}")
+            time.sleep(TEMP_ERROR_SLEEP)
 
         except S95HttpError as e:
-            print(f"❌ HTTP ошибка для {link_s95_runner}: {e}")
-            continue
+            log(f"HTTP ошибка для {link_s95_runner}: {e}")
+
+        except SQLAlchemyError as e:
+            log(f"DB ошибка для {link_s95_runner}: {e}. Пересоздаю engine и жду 60s.")
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+
+            engine = create_engine(
+                credential,
+                pool_pre_ping=True,
+                pool_recycle=900,
+                pool_size=5,
+                max_overflow=10,
+            )
+            time.sleep(60)
 
         except Exception as e:
-            print(f"❌ Ошибка при обработке {link_s95_runner}: {e}")
+            log(f"Неожиданная ошибка для {link_s95_runner}: {e}")
+
+        if not success:
+            sleep_range(MIN_SLEEP_BETWEEN_USERS, MAX_SLEEP_BETWEEN_USERS, "после неуспеха")
+            log(f"Пропускаем участника после неуспешной обработки: {link_s95_runner}")
             continue
 
-        # Рандомная пауза каждые 5–15 участников
-        if (i + 1) % random.randint(1, 5) == 0:
-            time.sleep(random.randint(10, 20))
+        if (i + 1) % BATCH_SIZE == 0:
+            log(f"Пакет из {BATCH_SIZE} участников обработан, сон {BATCH_SLEEP}s")
+            time.sleep(BATCH_SLEEP)
+
+        processed += 1
+
+        if processed >= next_reset_at:
+            client.reset_session()
+            time.sleep(random.uniform(10, 30))
+            processed = 0
+            next_reset_at = random.randint(SESSION_RESET_MIN, SESSION_RESET_MAX)
